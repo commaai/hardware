@@ -1,6 +1,6 @@
 # comma three
 
-<img src="https://github.com/commaai/hardware/blob/master/comma3/comma-three.jpg" width="50%">
+<img src="https://github.com/commaai/hardware/blob/master/comma_three/comma-three.jpg" width="50%">
 
 The comma three is the predecessor of the [comma 3X](../comma3x/README.md).
 From the outside, a comma 3X looks similar to a comma three.

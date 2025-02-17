@@ -1,6 +1,6 @@
 # comma 3X
 
-<img src="https://github.com/commaai/hardware/blob/master/comma3x/comma-three-x.jpg" width="50%">
+<img src="https://github.com/commaai/hardware/blob/master/comma_3X/comma-three-x.jpg" width="50%">
 
 <table>
    <tr>

@@ -1,6 +1,6 @@
 # comma two
 
-<img src="https://github.com/commaai/hardware/blob/master/comma2/comma-two.jpg" width="50%">
+<img src="https://github.com/commaai/hardware/blob/master/comma_two/comma-two.jpg" width="50%">
 
 comma two is based on a Leeco LePro3.
 
