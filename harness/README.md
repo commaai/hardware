@@ -1,6 +1,6 @@
 # Car harness
 
-<a href="https://www.youtube.com/watch?v=keM6UnpguKo" title="car harness"><img src="https://github.com/commaai/hardware/blob/master/harness/car-harness-includes.png"></a>
+<a href="https://www.youtube.com/watch?v=keM6UnpguKo" title="car harness"><img src="https://github.com/commaai/hardware/blob/master/harness/car-harness-includes.avif"></a>
 
 ## harness connector
 
