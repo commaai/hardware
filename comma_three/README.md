@@ -21,8 +21,7 @@ From the outside, a comma 3X looks similar to a comma three.
    <tr>
       <td>Cameras</td>
       <td>
-         - Onsemi <a href="https://www.onsemi.com/products/sensors/image-sensors/AR0231AT">AR0231</a> sensors<br>
-         - Late C3s have <a href="https://www.ovt.com/products/os04c10/">OX03C10</a> sensors
+         - Onsemi <a href="https://www.onsemi.com/products/sensors/image-sensors/AR0231AT">AR0231</a> sensors<br> or OVT <a href="https://www.ovt.com/products/os04c10/">OX03C10</a> sensors
          - Narrow road camera to see far-away objects<br>
          - 185° wide road camera<br>
          - 185° driver monitoring camera (with night vision)<br>
