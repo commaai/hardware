@@ -2,7 +2,7 @@
 
 <img src="https://github.com/commaai/hardware/blob/master/comma_three/comma-three.jpg" width="50%">
 
-The comma three is the predecessor of the [comma 3X](../comma3x/README.md).
+The comma three is the predecessor of the [comma 3X](../comma_3X/README.md).
 From the outside, a comma 3X looks similar to a comma three.
 
 <table>
@@ -21,7 +21,7 @@ From the outside, a comma 3X looks similar to a comma three.
    <tr>
       <td>Cameras</td>
       <td>
-         - Onsemi <a href="https://www.onsemi.com/products/sensors/image-sensors/AR0231AT">AR0231</a> sensors<br>
+         - Onsemi <a href="https://www.onsemi.com/products/sensors/image-sensors/AR0231AT">AR0231</a> or OmniVision <a href="https://www.ovt.com/products/os04c10/">OX03C10</a> sensors<br>
          - Narrow road camera to see far-away objects<br>
          - 185° wide road camera<br>
          - 185° driver monitoring camera (with night vision)<br>
