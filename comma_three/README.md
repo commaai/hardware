@@ -46,3 +46,6 @@ From the outside, a comma 3X looks similar to a comma three.
       <td>AGNOS (Ubuntu based)</td>
    </tr>
 </table>
+
+# Reflashing your comma three
+Visit [flash.comma.ai](https://flash.comma.ai/) to reflash your comma three with the latest compatible firmware.
