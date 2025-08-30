@@ -47,7 +47,9 @@ From the outside, a comma 3X looks similar to a comma three.
    </tr>
 </table>
 
-# Reflashing your comma three
+# Reflashing your comma three #
+These instructions assume you are using a computer running Ubuntu or similar
+
 **1. Unplug the device and wait for the LED to switch off.**
 
 **2. Connect the device to your computer using the lower USB-C port.**
@@ -59,7 +61,7 @@ From the outside, a comma 3X looks similar to a comma three.
 for d in /sys/bus/usb/drivers/qcserial/*-*; do [ -e "$d" ] && echo -n "$(basename $d)" | sudo tee /sys/bus/usb/drivers/qcserial/unbind > /dev/null; done
 ```
 
-**2. Run the flashing script (will take ~1h)**
+**5. Run the flashing script (will take ~1h)**
 ``` bash
 bash <(curl https://raw.githubusercontent.com/commaai/hardware/refs/heads/tici_flash/comma_three/scripts/flash.sh)
 ```
