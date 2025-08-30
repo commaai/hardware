@@ -100,8 +100,7 @@ def load_manifest(url):
 if __name__ == "__main__":
   update = load_manifest(TICI_MANIFEST)
   for partition in update:
-    if 'system' not in partition['name']:
-      download_and_decompress(partition['url'], partition['hash'], '..' / Path(f"{partition['name']}.img"))
+    download_and_decompress(partition['url'], partition['hash'], '..' / Path(f"{partition['name']}.img"))
 EOF
 
 for p in aop abl xbl xbl_config devcfg boot system; do
