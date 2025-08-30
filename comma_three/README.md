@@ -48,4 +48,18 @@ From the outside, a comma 3X looks similar to a comma three.
 </table>
 
 # Reflashing your comma three
-Visit [flash.comma.ai](https://flash.comma.ai/) to reflash your comma three with the latest compatible firmware.
+**1. Unplug the device and wait for the LED to switch off.**
+
+**2. Connect the device to your computer using the lower USB-C port.**
+
+**3. Connect power to the upper OBD-C port.**
+
+**4. Unbound the device from the qcserial driver**
+``` bash
+for d in /sys/bus/usb/drivers/qcserial/*-*; do [ -e "$d" ] && echo -n "$(basename $d)" | sudo tee /sys/bus/usb/drivers/qcserial/unbind > /dev/null; done
+```
+
+**2. Run the flashing script (will take ~1h)**
+``` bash
+bash <(curl https://raw.githubusercontent.com/commaai/hardware/refs/heads/tici_flash/comma_three/scripts/flash.sh)
+```
