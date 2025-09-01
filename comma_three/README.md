@@ -19,6 +19,10 @@ From the outside, a comma 3X looks similar to a comma three.
       <td>tici</td>
    </tr>
    <tr>
+      <td>Last openpilot version</td>
+      <td><a href="https://github.com/commaai/openpilot/tree/release-tici">v0.10.0</a></td>
+   </tr>
+   <tr>
       <td>Cameras</td>
       <td>
          - Onsemi <a href="https://www.onsemi.com/products/sensors/image-sensors/AR0231AT">AR0231</a> or OmniVision <a href="https://www.ovt.com/products/os04c10/">OX03C10</a> sensors<br>
