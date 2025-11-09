@@ -1,6 +1,6 @@
 # comma four
 
-<img src="https://github.com/commaai/hardware/blob/master/comma_3X/comma-four.avif" width="50%">
+<img src="https://github.com/commaai/hardware/blob/master/comma_four/comma-four.avif" width="50%">
 
 <table>
    <tr>
