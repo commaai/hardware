@@ -110,7 +110,7 @@ pandas are designed for cars from 2008 and newer. [panda firmware]("https://gith
    <tr>
       <td>Buyable in shop</td>
       <td>
-        No
+        <a href="https://web.archive.org/web/20180714140302/https://comma.ai/shop/products/panda-obd-ii-dongle">No (archive)</a>
       </td>
    </tr>
    <tr>
