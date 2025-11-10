@@ -1,6 +1,11 @@
 Body
 =====
 
+Shop
+------
+
+[archive - click here](https://web.archive.org/web/20240814050124/https://comma.ai/shop/body)
+
 Stands
 ------
 
