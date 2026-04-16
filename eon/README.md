@@ -21,6 +21,10 @@ EON had two revisions:
       <td>-</td>
    </tr>
    <tr>
+      <td>Buyable in shop</td>
+      <td><a href="https://web.archive.org/web/20181130030515/https://comma.ai/shop/products/eon-gold-dashcam-devkit">No (view archive)</a></td>
+   </tr>
+   <tr>
       <td>Last openpilot version</td>
       <td>v0.8.0</td>
    </tr>

@@ -17,6 +17,10 @@ comma two is based on a Leeco LePro3.
     <td>cici</td>
   </tr>
   <tr>
+    <td>Buyable in shop</td>
+    <td><a href="https://web.archive.org/web/20210629191039/https://comma.ai/shop/products/comma-two-devkit">No (view archive)</a></td>
+  </tr>
+  <tr>
     <td>Last openpilot version</td>
     <td><a href="https://github.com/commaai/openpilot/tree/commatwo_master">v0.8.13</a></td>
   </tr>
