@@ -18,7 +18,7 @@
    <tr>
       <td>Buyable in shop</td>
       <td>
-        <a href="https://comma.ai/shop">Yes</a>
+        <a href="https://web.archive.org/web/20251003105920/https://comma.ai/shop/comma-3x">No (view archive)</a>
       </td>
    </tr>
    <tr>
