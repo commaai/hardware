@@ -16,12 +16,6 @@
       <td>tizi</td>
    </tr>
    <tr>
-      <td>Buyable in shop</td>
-      <td>
-        <a href="https://comma.ai/shop">Yes</a>
-      </td>
-   </tr>
-   <tr>
       <td>Cameras</td>
       <td>
          - OmniVision <a href="https://www.ovt.com/products/ox03c10/">OX03C10</a> sensors</b><br>
