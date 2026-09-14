@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "comma-up"
+version = "0.1.0"
+description = "Standalone UP board debugging tools"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+up-can = "up.can:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["up"]
