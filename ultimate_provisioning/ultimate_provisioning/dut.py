@@ -109,18 +109,3 @@ class DUT:
     subprocess.run(["sudo", "ip", "link", "set", iface, "up"], timeout=5, check=True)
     self.shell(f"sudo ip addr replace {DUT_IP}/30 dev usb0 && sudo ip link set usb0 up")
     return DUT_IP
-
-  def share_internet(self) -> None:
-    """NAT the DUT's traffic through the UP. The DUT's own connections (e.g. wifi) still take priority."""
-    subprocess.run(["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], timeout=5, check=True)
-    rule = ["POSTROUTING", "-s", f"{DUT_IP}/32", "-j", "MASQUERADE"]
-    if subprocess.run(["sudo", "iptables", "-t", "nat", "-C", *rule], capture_output=True, timeout=5).returncode != 0:
-      subprocess.run(["sudo", "iptables", "-t", "nat", "-A", *rule], timeout=5, check=True)
-    subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], timeout=5, check=True)
-    self.shell(f"sudo ip route replace default via {HOST_IP} dev usb0 metric 1000 && sudo resolvectl dns usb0 1.1.1.1 8.8.8.8")
-
-  def authorize_ssh_key(self, pubkey: str) -> None:
-    pubkey = pubkey.strip()
-    keys = "/data/params/d/GithubSshKeys"
-    self.shell(f"mkdir -p /data/params/d && echo -n 1 > /data/params/d/SshEnabled && "
-               f"(grep -qxF '{pubkey}' {keys} 2>/dev/null || echo '{pubkey}' >> {keys})")
