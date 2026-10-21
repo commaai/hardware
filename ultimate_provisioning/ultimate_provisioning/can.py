@@ -323,12 +323,6 @@ def _rebind(interfaces: Sequence[str]) -> None:
     configure([i], bitrate)
 
 
-def stop_gpio_service() -> None:
-  # AGNOS's gpio.service is a tici's: on the UP it exports the TCANs' GPIOs, then polls gpio33 20x/s forever, "activating"
-  if subprocess.run(["systemctl", "is-active", "gpio.service"], capture_output=True, text=True).stdout.strip() in ("active", "activating"):
-    subprocess.run(_sudo() + ["systemctl", "stop", "gpio.service"], check=True)
-
-
 def recover(interfaces: Sequence[str] | None = None) -> None:
   """Fix the interfaces' TCANs: restart the broken interfaces, then reset all TCANs. Raises if they're still broken."""
   interfaces = available_interfaces() if interfaces is None else interfaces

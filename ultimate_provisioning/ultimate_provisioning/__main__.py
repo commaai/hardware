@@ -53,7 +53,6 @@ def main() -> None:
   elif args.command == "ready":
     can.stop_holder()
     dut.up.reset_obdc_gpio()
-    can.stop_gpio_service()
     can.recover()
     for pid, user in can.users().items():
       print(f"warning: pid {pid} ({user}) is using the UP's CAN", file=sys.stderr)

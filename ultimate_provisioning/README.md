@@ -34,7 +34,7 @@ or `console --log` to just watch it, e.g. while the DUT boots. The login is `com
 `console --login` logs in for you.
 
 For CI:
-- `python -m ultimate_provisioning ready` stops whatever an earlier run left driving the CAN, floats the harness lines, stops AGNOS's gpio.service,
+- `python -m ultimate_provisioning ready` stops whatever an earlier run left driving the CAN, floats the harness lines,
   checks the TCANs and resets them if they hung, then gets the DUT ready
 - `python -m ultimate_provisioning jungle --serve` serves a `Jungle` to tests on the DUT over XML-RPC, on port 8722
 - `python -m ultimate_provisioning release` stops it, or a CAN replay, and floats the harness lines
@@ -47,6 +47,8 @@ Install with uv:
 [tool.uv.sources]
 comma-ultimate-provisioning = { git = "https://github.com/commaai/hardware", subdirectory = "ultimate_provisioning" }
 ```
+
+On a UP, `UP()` also caps the gold cores at 1.2 GHz (AGNOS runs them flat out at 2.65 GHz) and stops AGNOS's gpio.service.
 
 ## Hardware
 
