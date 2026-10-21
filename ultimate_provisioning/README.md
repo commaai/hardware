@@ -3,10 +3,10 @@
 The ultimate provisioning (UP) board is the comma four test and provisioning station in the factory.
 The device under test (DUT) plugs into the UP's OBD-C and aux USB ports.
 
-`up` is a small, dependency-free Python package for driving the UP hardware from the UP itself.
+`ultimate_provisioning` is a small, dependency-free Python package for driving the UP hardware from the UP itself.
 
 ```python
-from up import UP, CAN
+from ultimate_provisioning import UP, CAN
 
 up = UP()
 up.enter_qdl()                       # power cycle the DUT into QDL
@@ -24,7 +24,7 @@ with CAN() as can:                   # SocketCAN, one bus per can* interface
 Install with uv:
 ```toml
 [tool.uv.sources]
-up = { git = "https://github.com/commaai/hardware", subdirectory = "ultimate_provisioning" }
+ultimate-provisioning = { git = "https://github.com/commaai/hardware", subdirectory = "ultimate_provisioning" }
 ```
 
 ## Hardware

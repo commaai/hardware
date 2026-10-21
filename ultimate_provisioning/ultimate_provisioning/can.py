@@ -7,9 +7,9 @@ Python API:
       print(bus, hex(address), data.hex())
 
 CLI:
-  python -m up.can setup --bitrate 500000
-  python -m up.can send 2 0x123 0102
-  python -m up.can recv --timeout 5
+  python -m ultimate_provisioning.can setup --bitrate 500000
+  python -m ultimate_provisioning.can send 2 0x123 0102
+  python -m ultimate_provisioning.can recv --timeout 5
 """
 
 from __future__ import annotations
