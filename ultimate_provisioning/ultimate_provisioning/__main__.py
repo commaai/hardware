@@ -1,5 +1,6 @@
 import argparse
 
+from ultimate_provisioning.console import Console
 from ultimate_provisioning.dut import DUT, DUTState
 
 
@@ -12,7 +13,17 @@ def main() -> None:
   sub.add_parser("reboot", help="power cycle the DUT")
   sub.add_parser("qdl", help="power cycle the DUT into QDL")
   sub.add_parser("off", help="power off the DUT")
+  console = sub.add_parser("console", help="the DUT's serial console, ctrl-] to quit (login: comma/comma)")
+  console.add_argument("--log", action="store_true", help="only print the console's output, until interrupted")
   args = parser.parse_args()
+
+  if args.command == "console":
+    with Console() as c:
+      try:
+        c.log() if args.log else c.interact()
+      except KeyboardInterrupt:
+        pass
+    return
 
   dut = DUT()
   if args.command == "status":

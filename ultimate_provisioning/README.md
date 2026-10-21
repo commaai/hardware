@@ -19,7 +19,15 @@ up.reset_obdc_gpio()                 # float all the SBU lines
 with CAN() as can:                   # SocketCAN, one bus per can* interface
   can.can_send(0x123, b"\x01\x02", bus=0)
   print(can.can_recv(timeout=1.0))
+
+with Console() as c:                 # the DUT's serial console
+  c.login()                          # comma/comma
+  c.write(b"uname -a\r")
+  print(c.read_until(b"$ "))
 ```
+
+The DUT's serial console from the shell: `python -m ultimate_provisioning console` (ctrl-] to quit),
+or `console --log` to just watch it, e.g. while the DUT boots.
 
 Install with uv:
 ```toml
@@ -38,3 +46,4 @@ ultimate-provisioning = { git = "https://github.com/commaai/hardware", subdirect
 | SBU voltage | PM8998 VADC, 24.9k/10k divider |
 | OBD-C power monitor | INA on i2c-0, 0x40 |
 | aux port VBUS | `smb2-vbus` regulator |
+| DUT serial console | USB hub's UART bridge (0424:704c), `/dev/ttyACM*`, 115200 8N1 |
