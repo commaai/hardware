@@ -106,9 +106,10 @@ def pin_can_irqs() -> None:
 
 
 def keep_off_can_cpu() -> None:
-  cpus = set(range(os.cpu_count())) - {CAN_CPU}
-  for tid in os.listdir("/proc/self/task"):
-    os.sched_setaffinity(int(tid), cpus)
+  # only takes CAN_CPU away, so a process pinned elsewhere stays pinned
+  for tid in map(int, os.listdir("/proc/self/task")):
+    cpus = os.sched_getaffinity(tid) - {CAN_CPU}
+    os.sched_setaffinity(tid, cpus or set(range(os.cpu_count())) - {CAN_CPU})
 
 
 def on_up() -> bool:
