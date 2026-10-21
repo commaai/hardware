@@ -24,6 +24,8 @@ import subprocess
 import time
 from collections.abc import Iterable, Mapping, Sequence
 
+from ultimate_provisioning.board import keep_off_can_cpu, on_up, pin_can_irqs
+
 
 CAN_EFF_FLAG = 0x80000000
 CAN_EFF_MASK = 0x1FFFFFFF
@@ -60,6 +62,8 @@ class CAN:
       self.interfaces = dict(enumerate(interfaces))
     if not self.interfaces:
       raise RuntimeError("no CAN interfaces found")
+    if on_up():
+      keep_off_can_cpu()
 
     self._selector = selectors.DefaultSelector()
     self._sockets: dict[int, socket.socket] = {}
@@ -148,6 +152,8 @@ def configure(interfaces: Sequence[str], bitrate: int, *, fd: bool = False, dbit
     subprocess.run(command, check=True)
     subprocess.run(prefix + ["ip", "link", "set", interface, "txqueuelen", "100"], check=True)
     subprocess.run(prefix + ["ip", "link", "set", interface, "up"], check=True)
+  if on_up():
+    pin_can_irqs()
 
 
 def _sudo() -> list[str]:

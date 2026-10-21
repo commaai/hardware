@@ -48,7 +48,8 @@ Install with uv:
 comma-ultimate-provisioning = { git = "https://github.com/commaai/hardware", subdirectory = "ultimate_provisioning" }
 ```
 
-On a UP, `UP()` also caps the gold cores at 1.2 GHz (AGNOS runs them flat out at 2.65 GHz) and stops AGNOS's gpio.service.
+On a UP, `UP()` also caps the gold cores at 1.2 GHz (AGNOS runs them flat out at 2.65 GHz), stops AGNOS's gpio.service,
+and puts the TCAN and SPI IRQs on cpu1. `CAN()` keeps its process off cpu1.
 
 ## Hardware
 

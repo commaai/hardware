@@ -10,6 +10,7 @@ from statistics import mean
 VADC = "/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-00/c440000.qcom,spmi:qcom,pm8998@0:vadc@3100"
 INA_HWMON = "/sys/bus/i2c/devices/0-0040/hwmon/hwmon*"
 GOLD_MAX_FREQ = "/sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq"
+CAN_CPU = 1  # the TCAN and SPI IRQs run here and our CAN users stay off it: no more RX FIFO overruns under bursty load
 GOLD_MAX_KHZ = 1209600  # AGNOS runs the gold cores at 2.65 GHz. at 1.2 GHz the SoC is ~17 C cooler under full CAN load, same CAN throughput
 
 
@@ -90,6 +91,26 @@ def raw_to_voltage(raw_uv: int, offset: float = 0) -> float:
   return ((raw_uv / 1e6) - offset) / (r_eq / (r1 + r_eq))
 
 
+def pin_can_irqs() -> None:
+  # the TCANs' IRQs are only listed while their interface is up, the affinity sticks once set
+  with open("/proc/interrupts") as f:
+    irqs = [line.split(":")[0].strip() for line in f if line.split()[-1] in ("spi_geni", "can0", "can1", "can2", "can3")]
+  for irq in irqs:
+    with open(f"/proc/irq/{irq}/smp_affinity") as f:
+      if int(f.read(), 16) != 1 << CAN_CPU:
+        sudo_write(f"{1 << CAN_CPU:x}", f"/proc/irq/{irq}/smp_affinity")
+  # the SPI controller's message pump
+  for pid in subprocess.run(["pgrep", "-x", "spi0"], capture_output=True, text=True).stdout.split():
+    if os.sched_getaffinity(int(pid)) != {CAN_CPU}:
+      subprocess.run(["sudo", "taskset", "-p", f"{1 << CAN_CPU:x}", pid], stdout=subprocess.DEVNULL, check=True)
+
+
+def keep_off_can_cpu() -> None:
+  cpus = set(range(os.cpu_count())) - {CAN_CPU}
+  for tid in os.listdir("/proc/self/task"):
+    os.sched_setaffinity(int(tid), cpus)
+
+
 def on_up() -> bool:
   try:
     with open("/sys/firmware/devicetree/base/model") as f:
@@ -119,6 +140,7 @@ class UP:
     # AGNOS's gpio.service is a tici's: on the UP it exports the TCANs' GPIOs, then polls gpio33 20x/s forever, "activating"
     if subprocess.run(["systemctl", "is-active", "gpio.service"], capture_output=True, text=True).stdout.strip() in ("active", "activating"):
       subprocess.run(["sudo", "systemctl", "stop", "gpio.service"], check=True)
+    pin_can_irqs()
 
   # *** aux USB port ***
 
