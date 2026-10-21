@@ -27,7 +27,8 @@ with Console() as c:                 # the DUT's serial console
 ```
 
 The DUT's serial console from the shell: `python -m ultimate_provisioning console` (ctrl-] to quit),
-or `console --log` to just watch it, e.g. while the DUT boots.
+or `console --log` to just watch it, e.g. while the DUT boots. The login is `comma` / `comma` on every DUT,
+`console --login` logs in for you.
 
 Install with uv:
 ```toml

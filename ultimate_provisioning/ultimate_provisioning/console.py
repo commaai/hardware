@@ -7,7 +7,8 @@ import time
 import tty
 from pathlib import Path
 
-# the UP's USB hub has a UART bridge wired to the DUT's serial console (ttyMSM0, 115200 8N1)
+# the UP's USB hub has a UART bridge wired to the DUT's serial console (ttyMSM0, 115200 8N1).
+# AGNOS's getty login is the same on every DUT: comma / comma
 HUB_VID_PID = ("0424", "704c")
 BAUD = termios.B115200
 ESCAPE = b"\x1d"  # ctrl-]

@@ -14,12 +14,16 @@ def main() -> None:
   sub.add_parser("qdl", help="power cycle the DUT into QDL")
   sub.add_parser("off", help="power off the DUT")
   console = sub.add_parser("console", help="the DUT's serial console, ctrl-] to quit (login: comma/comma)")
+  console.add_argument("--login", action="store_true", help="log in first, as comma/comma like on every DUT")
   console.add_argument("--log", action="store_true", help="only print the console's output, until interrupted")
   args = parser.parse_args()
 
   if args.command == "console":
     with Console() as c:
       try:
+        if args.login:
+          c.login()
+          c.write(b"\r")  # a fresh prompt for the terminal
         c.log() if args.log else c.interact()
       except KeyboardInterrupt:
         pass
