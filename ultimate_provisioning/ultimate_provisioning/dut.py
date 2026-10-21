@@ -114,9 +114,10 @@ class DUT:
 
   def share_internet(self) -> None:
     """NAT the DUT's traffic through the UP. The DUT's own connections (e.g. wifi) still take priority."""
+    # AGNOS's 4.9 kernel only supports NAT through the legacy iptables backend
     subprocess.run(["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], timeout=5, check=True)
     rule = ["POSTROUTING", "-s", f"{DUT_IP}/32", "-j", "MASQUERADE"]
-    if subprocess.run(["sudo", "iptables", "-t", "nat", "-C", *rule], capture_output=True, timeout=5).returncode != 0:
-      subprocess.run(["sudo", "iptables", "-t", "nat", "-A", *rule], timeout=5, check=True)
-    subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], timeout=5, check=True)
+    if subprocess.run(["sudo", "iptables-legacy", "-t", "nat", "-C", *rule], capture_output=True, timeout=5).returncode != 0:
+      subprocess.run(["sudo", "iptables-legacy", "-t", "nat", "-A", *rule], timeout=5, check=True)
+    subprocess.run(["sudo", "iptables-legacy", "-P", "FORWARD", "ACCEPT"], timeout=5, check=True)
     self.shell(f"sudo ip route replace default via {HOST_IP} dev usb0 metric 1000 && sudo resolvectl dns usb0 1.1.1.1 8.8.8.8")
