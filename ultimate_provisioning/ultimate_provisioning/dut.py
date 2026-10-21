@@ -28,10 +28,15 @@ class DUT:
   # *** adb ***
 
   def adb(self, *args: str, timeout: float | None = 30, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["adb", *args], capture_output=True, text=True, timeout=timeout, check=check)
+    return subprocess.run(["adb", *args], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, check=check)
 
   def shell(self, cmd: str, timeout: float | None = 30, check: bool = True) -> str:
-    return self.adb("shell", cmd, timeout=timeout, check=check).stdout
+    # the DUT's adbd doesn't return the command's exit code, so pass it through stdout
+    out = self.adb("shell", f"({cmd}); echo $?", timeout=timeout, check=check).stdout
+    out, _, rc = out.rstrip().rpartition("\n")
+    if check and rc != "0":
+      raise subprocess.CalledProcessError(int(rc) if rc.isdigit() else -1, cmd, out)
+    return out
 
   def push(self, src: str, dst: str) -> None:
     self.adb("push", src, dst, timeout=None)
@@ -92,6 +97,10 @@ class DUT:
 
   def enter_qdl(self) -> None:
     self.up.enter_qdl()
+
+  def setup_power(self) -> None:
+    """Stop the DUT from charging from or backfeeding into the UP's aux port. Doesn't persist across DUT reboots."""
+    self.shell("echo 1 | sudo tee /sys/class/power_supply/battery/input_suspend && echo sink | sudo tee /sys/class/dual_role_usb/otg_default/power_role")
 
   # *** network ***
 
