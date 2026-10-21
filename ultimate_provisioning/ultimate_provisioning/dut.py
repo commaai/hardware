@@ -118,11 +118,12 @@ class DUT:
 
     On boot, AGNOS's comma.sh deletes AdbEnabled once /data/continue.sh exists if GithubSshKeys are still
     the setup keys, which leaves the DUT unreachable from the UP. Mark the keys as changed to opt out of that.
+    Synced, since the DUT is often power cycled right after.
     """
     adb, keys = "/data/params/d/AdbEnabled", "/data/params/d/GithubSshKeys"
     # rewriting AdbEnabled restarts the USB gadget, so only write it if needed
     self.shell(f"mkdir -p /data/params/d && if [ \"$(cat {adb} 2>/dev/null)\" != 1 ]; then echo -n 1 > {adb}; fi && "
-               f"if cmp -s {keys} /usr/comma/setup_keys; then echo '# ultimate_provisioning: keep adb enabled' >> {keys}; fi")
+               f"if cmp -s {keys} /usr/comma/setup_keys; then echo '# ultimate_provisioning: keep adb enabled' >> {keys}; fi && sync")
 
   # *** network ***
 
