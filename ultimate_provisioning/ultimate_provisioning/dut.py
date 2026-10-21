@@ -52,7 +52,8 @@ class DUT:
   def in_qdl(self) -> bool:
     for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
       d = Path(d).parent
-      if (d / "idVendor").read_text().strip() == "05c6" and (d / "idProduct").read_text().strip() == "9008":
+      # comma's devices enumerate in QDL as 3801:9008
+      if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
         return True
     return False
 
@@ -77,6 +78,8 @@ class DUT:
   def wait_for_boot(self, timeout: float = 120) -> None:
     st = time.monotonic()
     while not self.adb_online():
+      if self.in_qdl():
+        raise TimeoutError("DUT is in QDL")
       if time.monotonic() - st > timeout:
         raise TimeoutError(f"DUT didn't boot in {timeout}s, state={self.state().value}")
       time.sleep(1)
@@ -90,10 +93,18 @@ class DUT:
   def off(self) -> None:
     self.up.set_power(obd_c=False, aux=False)
 
-  def boot(self, timeout: float = 120) -> None:
-    self.up.reboot()
-    self.up.set_aux_dfp()
-    self.wait_for_boot(timeout)
+  def boot(self, timeout: float = 120, tries: int = 3) -> None:
+    # the DUT occasionally lands in QDL or doesn't come up, e.g. when coming from QDL or with the aux port in ufp mode
+    for i in range(tries):
+      self.up.reboot()
+      self.up.set_aux_dfp()
+      try:
+        self.wait_for_boot(timeout)
+        return
+      except TimeoutError as e:
+        if i == tries - 1:
+          raise
+        print(f"boot failed, retrying: {e}")
 
   def enter_qdl(self) -> None:
     self.up.enter_qdl()
@@ -101,6 +112,17 @@ class DUT:
   def setup_power(self) -> None:
     """Stop the DUT from charging from or backfeeding into the UP's aux port. Doesn't persist across DUT reboots."""
     self.shell("echo 1 | sudo tee /sys/class/power_supply/battery/input_suspend && echo sink | sudo tee /sys/class/dual_role_usb/otg_default/power_role")
+
+  def setup_adb(self) -> None:
+    """Keep adb (and the USB network) enabled across DUT reboots.
+
+    On boot, AGNOS's comma.sh deletes AdbEnabled once /data/continue.sh exists if GithubSshKeys are still
+    the setup keys, which leaves the DUT unreachable from the UP. Mark the keys as changed to opt out of that.
+    """
+    adb, keys = "/data/params/d/AdbEnabled", "/data/params/d/GithubSshKeys"
+    # rewriting AdbEnabled restarts the USB gadget, so only write it if needed
+    self.shell(f"mkdir -p /data/params/d && if [ \"$(cat {adb} 2>/dev/null)\" != 1 ]; then echo -n 1 > {adb}; fi && "
+               f"if cmp -s {keys} /usr/comma/setup_keys; then echo '# ultimate_provisioning: keep adb enabled' >> {keys}; fi")
 
   # *** network ***
 
@@ -112,13 +134,18 @@ class DUT:
         return p.split("/")[4]
     raise RuntimeError(f"no USB network interface for DUT {serial}")
 
+  def dut_interface(self) -> str:
+    """The DUT's network interface for its USB gadget. Usually usb0, but the modem's cdc_ether can take that name."""
+    return self.shell("echo $(cat /config/usb_gadget/g1/functions/ncm.0/ifname)").strip()  # no trailing newline
+
   def setup_network(self) -> str:
     """Bring up the USB network between the UP and the DUT. Returns the DUT's IP."""
     iface = self.host_interface()
     subprocess.run(["sudo", "ip", "-4", "addr", "flush", "dev", iface], timeout=5, check=True)
     subprocess.run(["sudo", "ip", "addr", "add", f"{HOST_IP}/30", "dev", iface], timeout=5, check=True)
     subprocess.run(["sudo", "ip", "link", "set", iface, "up"], timeout=5, check=True)
-    self.shell(f"sudo ip -4 addr flush dev usb0 && sudo ip addr add {DUT_IP}/30 dev usb0 && sudo ip link set usb0 up")
+    dut_iface = self.dut_interface()
+    self.shell(f"sudo ip -4 addr flush dev {dut_iface} && sudo ip addr add {DUT_IP}/30 dev {dut_iface} && sudo ip link set {dut_iface} up")
     return DUT_IP
 
   def share_internet(self) -> None:
@@ -129,4 +156,5 @@ class DUT:
     if subprocess.run(["sudo", "iptables-legacy", "-t", "nat", "-C", *rule], capture_output=True, timeout=5).returncode != 0:
       subprocess.run(["sudo", "iptables-legacy", "-t", "nat", "-A", *rule], timeout=5, check=True)
     subprocess.run(["sudo", "iptables-legacy", "-P", "FORWARD", "ACCEPT"], timeout=5, check=True)
-    self.shell(f"sudo ip route replace default via {HOST_IP} dev usb0 metric 1000 && sudo resolvectl dns usb0 1.1.1.1 8.8.8.8")
+    dut_iface = self.dut_interface()
+    self.shell(f"sudo ip route replace default via {HOST_IP} dev {dut_iface} metric 1000 && sudo resolvectl dns {dut_iface} 1.1.1.1 8.8.8.8")

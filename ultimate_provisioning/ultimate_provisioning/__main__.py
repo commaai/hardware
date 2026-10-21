@@ -21,6 +21,7 @@ def main() -> None:
     if args.reboot or dut.state() != DUTState.UP:
       dut.boot()
     dut.setup_power()
+    dut.setup_adb()
     ip = dut.setup_network()
     dut.share_internet()
     print(ip)
