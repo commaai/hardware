@@ -113,9 +113,10 @@ class UP:
     if sudo_read(path) != str(int(on)):
       sudo_write(int(on), path)
 
-  def set_aux_dfp(self) -> None:
-    # can hang if the DUT is in a bad state, so callers may want to run this with a timeout
-    sudo_write("dfp", "/sys/class/dual_role_usb/otg_default/mode")
+  def set_aux_dfp(self, timeout: float | None = 10) -> None:
+    # make the UP the USB host on the aux port. this can hang if the DUT is in a bad state
+    subprocess.run(["sudo", "tee", "/sys/class/dual_role_usb/otg_default/mode"], input="dfp", text=True,
+                   stdout=subprocess.DEVNULL, timeout=timeout, check=True)
 
   def reset_usb_hub(self) -> None:
     self.usb_hub_reset.on()
