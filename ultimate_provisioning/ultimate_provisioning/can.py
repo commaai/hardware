@@ -12,8 +12,6 @@ CLI:
   python -m ultimate_provisioning.can recv --timeout 5
 """
 
-from __future__ import annotations
-
 import argparse
 import fcntl
 import glob
@@ -87,7 +85,7 @@ class CAN:
     self._sockets.clear()
     self._selector.close()
 
-  def __enter__(self) -> CAN:
+  def __enter__(self) -> "CAN":
     return self
 
   def __exit__(self, *_: object) -> None:
