@@ -6,9 +6,10 @@ from pathlib import Path
 
 from ultimate_provisioning.board import UP
 
-# link-local addresses for the USB network between the UP and the DUT
-HOST_IP = "169.254.254.1"
-DUT_IP = "169.254.254.2"
+# addresses for the USB network between the UP and the DUT. not link-local,
+# since AGNOS's setup_keys only accept SSH from private networks
+HOST_IP = "10.254.254.1"
+DUT_IP = "10.254.254.2"
 
 
 class DUTState(Enum):
@@ -105,7 +106,8 @@ class DUT:
   def setup_network(self) -> str:
     """Bring up the USB network between the UP and the DUT. Returns the DUT's IP."""
     iface = self.host_interface()
-    subprocess.run(["sudo", "ip", "addr", "replace", f"{HOST_IP}/30", "dev", iface], timeout=5, check=True)
+    subprocess.run(["sudo", "ip", "-4", "addr", "flush", "dev", iface], timeout=5, check=True)
+    subprocess.run(["sudo", "ip", "addr", "add", f"{HOST_IP}/30", "dev", iface], timeout=5, check=True)
     subprocess.run(["sudo", "ip", "link", "set", iface, "up"], timeout=5, check=True)
-    self.shell(f"sudo ip addr replace {DUT_IP}/30 dev usb0 && sudo ip link set usb0 up")
+    self.shell(f"sudo ip -4 addr flush dev usb0 && sudo ip addr add {DUT_IP}/30 dev usb0 && sudo ip link set usb0 up")
     return DUT_IP
