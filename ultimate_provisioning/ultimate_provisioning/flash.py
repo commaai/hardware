@@ -2,6 +2,7 @@
 import hashlib
 import json
 import lzma
+import os
 import shutil
 import subprocess
 import urllib.request
@@ -64,7 +65,9 @@ def setup() -> tuple[Path, Path]:
     shutil.rmtree(tmp, ignore_errors=True)
     subprocess.run(["git", "clone", "-q", "https://github.com/commaai/qdl.js", str(tmp)], check=True)
     subprocess.run(["git", "-C", str(tmp), "checkout", "-q", QDL_JS_COMMIT], check=True)
-    subprocess.run([str(bun), "install", "--frozen-lockfile", "--ignore-scripts", "--production"], cwd=tmp, check=True)
+    # bun's cache defaults to ~/.bun, but the UP's /home is tiny
+    subprocess.run([str(bun), "install", "--frozen-lockfile", "--ignore-scripts", "--production"], cwd=tmp, check=True,
+                   env={**os.environ, "BUN_INSTALL_CACHE_DIR": str(CACHE / "bun_cache")})
     tmp.rename(qdl)
   shutil.copy(Path(__file__).with_name("flash.js"), qdl / "up_flash.js")
   return bun, qdl
