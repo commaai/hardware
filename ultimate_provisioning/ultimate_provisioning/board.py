@@ -1,3 +1,4 @@
+import errno
 import glob
 import os
 import re
@@ -7,9 +8,19 @@ from collections import deque
 from enum import Enum
 from statistics import mean
 
+from ultimate_provisioning.can import CAN, Lock, available_interfaces, configure, on_up, pin_can_irqs
+
 VADC = "/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-00/c440000.qcom,spmi:qcom,pm8998@0:vadc@3100"
 INA_HWMON = "/sys/bus/i2c/devices/0-0040/hwmon/hwmon*"
-CAN_CPU = 1  # the TCAN and SPI IRQs run here and our CAN users stay off it: no more RX FIFO overruns under bursty load
+
+ORIENTATION_NONE, ORIENTATION_1, ORIENTATION_2 = 0, 1, 2
+
+# the UP's CAN interface on each panda bus (0, 1, 2, and 3 for the OBD port), in each harness orientation.
+# bus 1 and the OBD port are the panda's two FDCAN2 pairs
+LANES = {
+  ORIENTATION_1: ("can0", "can1", "can2", "can3"),
+  ORIENTATION_2: ("can2", "can3", "can0", "can1"),
+}
 
 
 def sudo_read(path: str) -> str:
@@ -89,37 +100,13 @@ def raw_to_voltage(raw_uv: int, offset: float = 0) -> float:
   return ((raw_uv / 1e6) - offset) / (r_eq / (r1 + r_eq))
 
 
-def pin_can_irqs() -> None:
-  # the TCANs' IRQs are only listed while their interface is up, the affinity sticks once set
-  with open("/proc/interrupts") as f:
-    irqs = [line.split(":")[0].strip() for line in f if line.split()[-1] in ("spi_geni", "can0", "can1", "can2", "can3")]
-  for irq in irqs:
-    with open(f"/proc/irq/{irq}/smp_affinity") as f:
-      if int(f.read(), 16) != 1 << CAN_CPU:
-        sudo_write(f"{1 << CAN_CPU:x}", f"/proc/irq/{irq}/smp_affinity")
-  # the SPI controller's message pump
-  for pid in subprocess.run(["pgrep", "-x", "spi0"], capture_output=True, text=True).stdout.split():
-    if os.sched_getaffinity(int(pid)) != {CAN_CPU}:
-      subprocess.run(["sudo", "taskset", "-p", f"{1 << CAN_CPU:x}", pid], stdout=subprocess.DEVNULL, check=True)
-
-
-def keep_off_can_cpu() -> None:
-  # only takes CAN_CPU away, so a process pinned elsewhere stays pinned
-  for tid in map(int, os.listdir("/proc/self/task")):
-    cpus = os.sched_getaffinity(tid) - {CAN_CPU}
-    os.sched_setaffinity(tid, cpus or set(range(os.cpu_count())) - {CAN_CPU})
-
-
-def on_up() -> bool:
-  try:
-    with open("/sys/firmware/devicetree/base/model") as f:
-      return f.read().strip("\0\n") == "ultimate provisioning"
-  except OSError:
-    return False
-
-
 class UP:
-  """The ultimate provisioning board. Constructing it only pins the CAN IRQs (see pin_can_irqs), the rest waits for a method call."""
+  """The ultimate provisioning board. Constructing it only pins the CAN IRQs (see pin_can_irqs), the rest waits for a method call.
+
+  Its harness and CAN are for the panda in the DUT, with the same API as a panda jungle. Bus N is the UP's canN, see LANES.
+  The CAN is opened on first use, which takes the CAN lock until close().
+  """
+  HARNESS_ORIENTATION_NONE, HARNESS_ORIENTATION_1, HARNESS_ORIENTATION_2 = ORIENTATION_NONE, ORIENTATION_1, ORIENTATION_2
 
   def __init__(self):
     self.obd_c_pwr = GPIO(25)
@@ -129,8 +116,21 @@ class UP:
     self.sbu_2_relay = GPIO(50)
     self.usb_hub_reset = GPIO(134)
     self._ina_path = None
+    self.orientation = ORIENTATION_NONE
+    self.ignition = False
+    self.lock = None
+    self.can = None
     if on_up():
       pin_can_irqs()
+
+  def close(self) -> None:
+    if self.can is not None:
+      self.can.close()
+      self.can = None
+      self.reset_obdc_gpio()
+    if self.lock is not None:
+      self.lock.close()
+      self.lock = None
 
   # *** aux USB port ***
 
@@ -181,6 +181,75 @@ class UP:
   def reset_obdc_gpio(self) -> None:
     for g in (self.sbu_1_ign, self.sbu_1_relay, self.sbu_2_ign, self.sbu_2_relay):
       g.set_float()
+
+  # *** harness ***
+
+  def _apply_harness(self) -> None:
+    if self.orientation == ORIENTATION_1:
+      self.orientation_sbu2(ignition_on=self.ignition)
+    elif self.orientation == ORIENTATION_2:
+      self.orientation_sbu1(ignition_on=self.ignition)
+    else:
+      self.reset_obdc_gpio()
+
+  def set_harness_orientation(self, orientation: int) -> None:
+    self.orientation = orientation
+    self._apply_harness()
+
+  def set_ignition(self, enabled: bool) -> None:
+    self.ignition = enabled
+    self._apply_harness()
+
+  # *** CAN ***
+
+  def _can(self) -> CAN:
+    if self.can is None:
+      self.lock = self.lock or Lock()
+      self.interfaces = available_interfaces()
+      self.bitrates = dict.fromkeys(self.interfaces, 500_000)
+      self._restart_can(self.interfaces)
+    return self.can
+
+  def _restart_can(self, interfaces: list[str]) -> None:
+    # down and up drops the frames stuck in the TX FIFO, e.g. when nothing ACKs them
+    for i in interfaces:
+      configure([i], self.bitrates[i])
+    # the old sockets only return ENETDOWN after this
+    if self.can is not None:
+      self.can.close()
+    self.can = CAN(self.interfaces)
+
+  def set_can_speed_kbps(self, bus: int, speed: int) -> None:
+    self._can()
+    # like a jungle, ignore buses it doesn't have, e.g. 0xFFFF
+    if not 0 <= bus < len(self.interfaces):
+      return
+    i = self.interfaces[bus]
+    if self.bitrates[i] != speed * 1000:
+      self.bitrates[i] = speed * 1000
+      self._restart_can([i])
+
+  def can_send(self, addr: int, dat: bytes, bus: int) -> None:
+    try:
+      self._can().can_send(addr, dat, bus)
+    except OSError as e:
+      # this lane's TX buffer is full, i.e. nothing ACKs on it. drop the frame like a jungle does
+      if e.errno != errno.ENOBUFS:
+        raise
+
+  def can_send_many(self, msgs) -> None:
+    for addr, dat, bus in msgs:
+      self.can_send(addr, dat, bus)
+
+  def can_recv(self) -> list[tuple[int, bytes, int]]:
+    return self._can().can_recv()
+
+  def can_clear(self, bus: int) -> None:
+    can = self._can()
+    if bus == 0xFFFF:
+      can.can_recv()
+    elif 0 <= bus < len(self.interfaces):
+      self._restart_can([self.interfaces[bus]])
 
   # *** OBD-C power ***
 

@@ -1,10 +1,48 @@
 import argparse
+import os
+import signal
+import sys
+import xmlrpc.client
+from xmlrpc.server import SimpleXMLRPCServer
 
 from ultimate_provisioning import can
 from ultimate_provisioning.board import UP
 from ultimate_provisioning.console import Console
-from ultimate_provisioning.dut import DUT, DUTState
-from ultimate_provisioning.jungle import serve
+from ultimate_provisioning.dut import DUT, DUTState, HOST_IP
+
+PORT = 8722
+LOG_PATH = "/tmp/ultimate_provisioning_serve.log"
+
+
+def serve(ip: str = HOST_IP, port: int = PORT, foreground: bool = False) -> None:
+  """Serve the UP's harness and CAN over XML-RPC. Unless foreground, this returns once it's serving, and the server logs to LOG_PATH."""
+  up = UP()
+  up.set_harness_orientation(UP.HARNESS_ORIENTATION_1)
+  up.set_can_speed_kbps(0, 500)  # opens the CAN, and takes its lock
+  server = SimpleXMLRPCServer((ip, port), allow_none=True, logRequests=False)
+  server.register_function(lambda: True, "ping")
+  for f in ("set_harness_orientation", "set_ignition", "set_can_speed_kbps", "can_clear"):
+    server.register_function(getattr(up, f), f)
+  server.register_function(lambda addr, dat, bus: up.can_send(addr, dat.data, bus), "can_send")
+  server.register_function(lambda: [(addr, xmlrpc.client.Binary(dat), bus) for addr, dat, bus in up.can_recv()], "can_recv")
+
+  if not foreground:
+    if os.fork():
+      print(f"serving on {ip}:{port}, logging to {LOG_PATH}", flush=True)
+      os._exit(0)
+    os.setsid()
+    log = os.open(LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.dup2(log, 1)
+    os.dup2(log, 2)
+    up.lock.set_owner(os.getpid())
+  print(f"serving on {ip}:{port}", flush=True)
+  signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+  try:
+    server.serve_forever()
+  finally:
+    up.close()
 
 
 def main() -> None:
@@ -14,11 +52,10 @@ def main() -> None:
   ready = sub.add_parser("ready", help="stop leftovers from earlier runs, boot the DUT if needed, "
                                       "set up its power, USB network, and internet, and print its IP")
   ready.add_argument("--reboot", action="store_true", help="power cycle the DUT even if it's already up")
-  sub.add_parser("release", help="stop the jungle server or CAN replay, and float the harness lines")
-  jungle = sub.add_parser("jungle", help="act as a panda jungle for the DUT's panda")
-  jungle.add_argument("--serve", action="store_true", required=True, help="serve it over XML-RPC on the USB network to the DUT, "
-                                                                          "in the background once it's serving")
-  jungle.add_argument("--foreground", action="store_true", help="don't go to the background")
+  sub.add_parser("release", help="stop the server or CAN replay, and float the harness lines")
+  srv = sub.add_parser("serve", help="serve the UP's harness and CAN over XML-RPC on the USB network to the DUT, for the DUT's panda. "
+                                     "goes to the background once it's serving")
+  srv.add_argument("--foreground", action="store_true", help="don't go to the background")
   sub.add_parser("reboot", help="power cycle the DUT")
   sub.add_parser("qdl", help="power cycle the DUT into QDL")
   sub.add_parser("off", help="power off the DUT")
@@ -42,7 +79,7 @@ def main() -> None:
     can.stop_holder()
     UP().reset_obdc_gpio()
     return
-  if args.command == "jungle":
+  if args.command == "serve":
     serve(foreground=args.foreground)
     return
 

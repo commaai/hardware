@@ -17,9 +17,7 @@ import subprocess
 import time
 from collections.abc import Iterable, Mapping, Sequence
 
-from ultimate_provisioning.board import keep_off_can_cpu, on_up, pin_can_irqs
-
-
+CAN_CPU = 1  # the TCAN and SPI IRQs run here and our CAN users stay off it: no more RX FIFO overruns under bursty load
 CAN_EFF_FLAG = 0x80000000
 CAN_EFF_MASK = 0x1FFFFFFF
 CAN_SFF_MASK = 0x7FF
@@ -30,6 +28,35 @@ CAN_RAW_FD_FRAMES = 5
 _HEADER = struct.Struct("=IBB2x")
 _CLASSIC_FRAME_SIZE = 16
 _FD_FRAME_SIZE = 72
+
+
+def pin_can_irqs() -> None:
+  # the TCANs' IRQs are only listed while their interface is up, the affinity sticks once set
+  with open("/proc/interrupts") as f:
+    irqs = [line.split(":")[0].strip() for line in f if line.split()[-1] in ("spi_geni", "can0", "can1", "can2", "can3")]
+  for irq in irqs:
+    with open(f"/proc/irq/{irq}/smp_affinity") as f:
+      if int(f.read(), 16) != 1 << CAN_CPU:
+        subprocess.run(_sudo() + ["tee", f"/proc/irq/{irq}/smp_affinity"], input=f"{1 << CAN_CPU:x}", text=True, stdout=subprocess.DEVNULL, check=True)
+  # the SPI controller's message pump
+  for pid in subprocess.run(["pgrep", "-x", "spi0"], capture_output=True, text=True).stdout.split():
+    if os.sched_getaffinity(int(pid)) != {CAN_CPU}:
+      subprocess.run(["sudo", "taskset", "-p", f"{1 << CAN_CPU:x}", pid], stdout=subprocess.DEVNULL, check=True)
+
+
+def keep_off_can_cpu() -> None:
+  # only takes CAN_CPU away, so a process pinned elsewhere stays pinned
+  for tid in map(int, os.listdir("/proc/self/task")):
+    cpus = os.sched_getaffinity(tid) - {CAN_CPU}
+    os.sched_setaffinity(tid, cpus or set(range(os.cpu_count())) - {CAN_CPU})
+
+
+def on_up() -> bool:
+  try:
+    with open("/sys/firmware/devicetree/base/model") as f:
+      return f.read().strip("\0\n") == "ultimate provisioning"
+  except OSError:
+    return False
 
 
 def available_interfaces() -> list[str]:
@@ -159,7 +186,7 @@ LOCK_PATH = "/tmp/ultimate_provisioning_can.lock"
 
 
 class Lock:
-  """An flock on the UP's CAN lanes, held by whatever is driving them, e.g. the jungle server or a CAN replay."""
+  """An flock on the UP's CAN lanes, held by whatever is driving them, e.g. the XML-RPC server or a CAN replay."""
 
   def __init__(self) -> None:
     self.fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o666)
@@ -199,7 +226,7 @@ def lock_holder() -> int | None:
 
 
 def stop_holder(timeout: float = 5) -> None:
-  """Stop whatever holds the CAN lock, e.g. a jungle server or CAN replay left over from an earlier run."""
+  """Stop whatever holds the CAN lock, e.g. an XML-RPC server or CAN replay left over from an earlier run."""
   pid = lock_holder()
   if pid is None:
     return
