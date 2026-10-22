@@ -5,6 +5,9 @@ description = "Interface for the comma ultimate provisioning (UP) board"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+ultimate_provisioning = "ultimate_provisioning.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
