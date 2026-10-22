@@ -19,7 +19,7 @@ import xmlrpc.client
 from xmlrpc.server import SimpleXMLRPCServer
 
 from ultimate_provisioning.board import UP
-from ultimate_provisioning.can import CAN, Lock, available_interfaces, configure, users
+from ultimate_provisioning.can import CAN, Lock, available_interfaces, configure
 from ultimate_provisioning.dut import HOST_IP
 
 PORT = 8722
@@ -40,8 +40,6 @@ class Jungle:
 
   def __init__(self, up: UP | None = None):
     self.lock = Lock()
-    for pid, user in users().items():
-      print(f"warning: pid {pid} ({user}) is also using the UP's CAN", file=sys.stderr)
     self.up = up or UP()
     self.interfaces = available_interfaces()
     self.bitrates = dict.fromkeys(self.interfaces, 500_000)

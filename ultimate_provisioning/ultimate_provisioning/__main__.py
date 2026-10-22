@@ -1,5 +1,4 @@
 import argparse
-import sys
 
 from ultimate_provisioning import can
 from ultimate_provisioning.board import UP
@@ -12,7 +11,7 @@ def main() -> None:
   parser = argparse.ArgumentParser(prog="python -m ultimate_provisioning", description="control the DUT plugged into this UP")
   sub = parser.add_subparsers(dest="command", required=True)
   sub.add_parser("status", help="print the DUT's state")
-  ready = sub.add_parser("ready", help="stop leftovers from earlier runs, check the CAN, boot the DUT if needed, "
+  ready = sub.add_parser("ready", help="stop leftovers from earlier runs, boot the DUT if needed, "
                                       "set up its power, USB network, and internet, and print its IP")
   ready.add_argument("--reboot", action="store_true", help="power cycle the DUT even if it's already up")
   sub.add_parser("release", help="stop the jungle server or CAN replay, and float the harness lines")
@@ -53,9 +52,6 @@ def main() -> None:
   elif args.command == "ready":
     can.stop_holder()
     dut.up.reset_obdc_gpio()
-    can.recover()
-    for pid, user in can.users().items():
-      print(f"warning: pid {pid} ({user}) is using the UP's CAN", file=sys.stderr)
     if args.reboot or dut.state() != DUTState.UP:
       dut.boot()
     dut.setup_power()

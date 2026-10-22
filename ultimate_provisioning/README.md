@@ -35,10 +35,9 @@ or `console --log` to just watch it, e.g. while the DUT boots. The login is `com
 
 For CI:
 - `python -m ultimate_provisioning ready` stops whatever an earlier run left driving the CAN, floats the harness lines,
-  checks the TCANs and resets them if they hung, then gets the DUT ready
+  then gets the DUT ready
 - `python -m ultimate_provisioning jungle --serve` serves a `Jungle` to tests on the DUT over XML-RPC, on port 8722
 - `python -m ultimate_provisioning release` stops it, or a CAN replay, and floats the harness lines
-- `python -m ultimate_provisioning.can health [--recover]` checks the TCANs, and lists who else has the CAN open
 
 One thing drives the CAN at a time: `Jungle` takes a lock, and fails if something else holds it.
 

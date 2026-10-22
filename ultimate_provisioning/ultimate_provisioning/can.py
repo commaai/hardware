@@ -5,17 +5,10 @@ Python API:
     can.can_send(0x123, bytes.fromhex("0102"), bus=2)
     for address, data, bus in can.can_recv(timeout=1.0):
       print(bus, hex(address), data.hex())
-
-CLI:
-  python -m ultimate_provisioning.can setup --bitrate 500000
-  python -m ultimate_provisioning.can send 2 0x123 0102
-  python -m ultimate_provisioning.can recv --timeout 5
 """
 
-import argparse
 import fcntl
 import glob
-import json
 import os
 import selectors
 import socket
@@ -160,14 +153,6 @@ def _sudo() -> list[str]:
   return [] if os.geteuid() == 0 else ["sudo"]
 
 
-def _bitrate(interface: str) -> int:
-  out = subprocess.run(["ip", "-d", "-j", "link", "show", interface], capture_output=True, text=True).stdout
-  try:
-    return json.loads(out)[0]["linkinfo"]["info_data"]["bittiming"]["bitrate"]
-  except (ValueError, LookupError):
-    return 500_000
-
-
 # *** one user at a time ***
 
 LOCK_PATH = "/tmp/ultimate_provisioning_can.lock"
@@ -233,174 +218,3 @@ def _cmdline(pid: int | None) -> str:
       return f.read().replace(b"\0", b" ").decode().strip()
   except (OSError, TypeError):
     return "?"
-
-
-def users() -> dict[int, str]:
-  """Every process with a CAN socket open, with its systemd unit or command line."""
-  out = subprocess.run(_sudo() + ["lsof", "-nP", "-F", "pn"], capture_output=True, text=True).stdout
-  pids, pid = set(), 0
-  for line in out.splitlines():
-    if line.startswith("p"):
-      pid = int(line[1:])
-    elif line.startswith("n") and "CAN_RAW" in line:
-      pids.add(pid)
-  pids.discard(os.getpid())
-  ret = {}
-  for pid in pids:
-    try:
-      with open(f"/proc/{pid}/cgroup") as f:
-        unit = f.read().strip().rsplit("/", 1)[-1]
-    except OSError:
-      unit = ""
-    ret[pid] = unit if unit.endswith(".service") and not unit.startswith("session-") else _cmdline(pid)
-  return ret
-
-
-# *** TCAN health ***
-
-# a few TCAN4551 registers. MODE and every M_CAN register read 0 once the chip's SPI side hangs
-TCAN_MODE, TCAN_CREL, TCAN_ECR, TCAN_PSR, TCAN_TXBRP = 0x0800, 0x1000, 0x1040, 0x1044, 0x10CC
-
-
-def _spi_device(interface: str) -> str:
-  return os.path.basename(os.path.realpath(f"/sys/class/net/{interface}/device"))
-
-
-def read_tcan(interface: str, reg: int) -> int | None:
-  """One TCAN register, through regmap's debugfs. None if it can't be read."""
-  # one line at a time ("xxxx: xxxxxxxx\n"): reading the whole registers file can hang the chip
-  path = f"/sys/kernel/debug/regmap/{_spi_device(interface)}/registers"
-  out = subprocess.run(_sudo() + ["dd", f"if={path}", "bs=15", f"skip={reg}", "count=1", "status=none"],
-                       capture_output=True, text=True).stdout
-  try:
-    addr, val = out.split(":")
-    return int(val, 16) if int(addr, 16) == reg else None
-  except ValueError:
-    return None
-
-
-def _tx_packets(interface: str) -> int:
-  with open(f"/sys/class/net/{interface}/statistics/tx_packets") as f:
-    return int(f.read())
-
-
-def health(interfaces: Sequence[str] | None = None) -> dict[str, str]:
-  """What's wrong with each interface's TCAN, empty if they're all fine (or aren't TCANs)."""
-  interfaces = available_interfaces() if interfaces is None else interfaces
-  ret = {}
-  for i in interfaces:
-    crel = read_tcan(i, TCAN_CREL)
-    if crel is None:
-      continue
-    if crel >> 24 != 0x32:
-      ret[i] = f"its SPI side hung (CREL={crel:08x})"
-    elif read_tcan(i, TCAN_MODE) == 0:
-      ret[i] = "it lost its config (MODE=0)"
-    else:
-      # the M_CAN stops transmitting with frames pending and no errors, i.e. it isn't retrying a frame nothing ACKs
-      tx, txbrp = _tx_packets(i), read_tcan(i, TCAN_TXBRP)
-      time.sleep(0.2)
-      ecr, psr = read_tcan(i, TCAN_ECR), read_tcan(i, TCAN_PSR)
-      if txbrp and ecr is not None and psr is not None and ecr & 0xFF == 0 and (psr >> 3) & 0x3 == 1 and \
-         read_tcan(i, TCAN_TXBRP) == txbrp and _tx_packets(i) == tx:
-        ret[i] = f"its TX stopped (TXBRP={txbrp:08x})"
-  return ret
-
-
-def _rebind(interfaces: Sequence[str]) -> None:
-  # the TCANs share a reset line, owned by can0's driver: rebinding them resets all of them
-  devices = sorted({_spi_device(i) for i in interfaces})
-  driver = os.path.basename(os.path.realpath(f"/sys/bus/spi/devices/{devices[0]}/driver"))
-  bitrates = {i: _bitrate(i) for i in interfaces}
-  for d in reversed(devices):
-    subprocess.run(_sudo() + ["tee", f"/sys/bus/spi/drivers/{driver}/unbind"], input=d, text=True, stdout=subprocess.DEVNULL, check=True)
-  # AGNOS's gpio.sh exports the reset (33) and can0's (124) and can3's (32) interrupts, which fails the probe
-  for gpio in (33, 124, 32):
-    if os.path.exists(f"/sys/class/gpio/gpio{gpio}"):
-      subprocess.run(_sudo() + ["tee", "/sys/class/gpio/unexport"], input=str(gpio), text=True, stdout=subprocess.DEVNULL, check=False)
-  for d in devices:
-    subprocess.run(_sudo() + ["tee", f"/sys/bus/spi/drivers/{driver}/bind"], input=d, text=True, stdout=subprocess.DEVNULL, check=True)
-  st = time.monotonic()
-  while set(interfaces) - set(available_interfaces()):
-    if time.monotonic() - st > 5:
-      raise RuntimeError(f"{sorted(set(interfaces) - set(available_interfaces()))} didn't come back after rebinding {driver}")
-    time.sleep(0.1)
-  for i, bitrate in bitrates.items():
-    configure([i], bitrate)
-
-
-def recover(interfaces: Sequence[str] | None = None) -> None:
-  """Fix the interfaces' TCANs: restart the broken interfaces, then reset all TCANs. Raises if they're still broken."""
-  interfaces = available_interfaces() if interfaces is None else interfaces
-  bad = health(interfaces)
-  if not bad:
-    return
-  print(f"CAN: {', '.join(f'{i}: {e}' for i, e in bad.items())}, restarting them")
-  for i in bad:
-    subprocess.run(_sudo() + ["ip", "link", "set", i, "down"], check=False)
-    subprocess.run(_sudo() + ["ip", "link", "set", i, "up"], check=False)
-  bad = health(interfaces)
-  if not bad:
-    return
-  print(f"CAN: {', '.join(f'{i}: {e}' for i, e in bad.items())}, resetting the TCANs")
-  _rebind(interfaces)
-  bad = health(interfaces)
-  if bad:
-    raise RuntimeError(f"CAN still broken after resetting the TCANs, power cycle the UP: {bad}")
-
-
-def _hex_bytes(value: str) -> bytes:
-  value = value.replace(":", "").replace("_", "").replace(" ", "")
-  try:
-    return bytes.fromhex(value)
-  except ValueError as exc:
-    raise argparse.ArgumentTypeError(str(exc)) from exc
-
-
-def main() -> None:
-  parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-  parser.add_argument("--interfaces", default=",".join(available_interfaces()), help="comma-separated interfaces; list order defines bus numbers")
-  subparsers = parser.add_subparsers(dest="command", required=True)
-
-  setup = subparsers.add_parser("setup", help="configure and bring up every interface")
-  setup.add_argument("--bitrate", type=int, default=500_000)
-  setup.add_argument("--fd", action="store_true")
-  setup.add_argument("--dbitrate", type=int, default=2_000_000)
-
-  send = subparsers.add_parser("send", help="send one frame")
-  send.add_argument("bus", type=int)
-  send.add_argument("address", type=lambda value: int(value, 0))
-  send.add_argument("data", type=_hex_bytes)
-  send.add_argument("--fd", action="store_true")
-
-  recv = subparsers.add_parser("recv", help="receive frames and print their source bus")
-  recv.add_argument("--timeout", type=float, default=5.0)
-
-  hc = subparsers.add_parser("health", help="check the TCANs, and the other users of the CAN lanes")
-  hc.add_argument("--recover", action="store_true", help="restart or reset broken TCANs")
-
-  args = parser.parse_args()
-  interfaces = [item for item in args.interfaces.split(",") if item]
-  if args.command == "setup":
-    configure(interfaces, args.bitrate, fd=args.fd, dbitrate=args.dbitrate)
-    return
-  if args.command == "health":
-    if args.recover:
-      recover(interfaces)
-    for i, e in health(interfaces).items():
-      print(f"{i}: {e}")
-    for pid, user in users().items():
-      print(f"in use by pid {pid}: {user}")
-    return
-
-  with CAN(interfaces) as can:
-    if args.command == "send":
-      can.can_send(args.address, args.data, args.bus, fd=args.fd)
-    else:
-      for address, data, bus in can.can_recv(args.timeout):
-        frame_type = "fd" if len(data) > 8 else "classic"
-        print(f"bus={bus} interface={can.interfaces[bus]} id={address:#x} data={data.hex()} type={frame_type}")
-
-
-if __name__ == "__main__":
-  main()
