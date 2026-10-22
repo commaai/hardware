@@ -113,8 +113,11 @@ def in_qdl() -> bool:
   for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
     d = Path(d).parent
     # comma's devices enumerate in QDL as 3801:9008
-    if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
-      return True
+    try:
+      if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
+        return True
+    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+      pass
   return False
 
 
