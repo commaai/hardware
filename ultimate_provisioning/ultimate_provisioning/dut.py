@@ -30,10 +30,12 @@ class DUT:
 
   def shell(self, cmd: str, timeout: float | None = 30, check: bool = True) -> str:
     # the DUT's adbd doesn't return the command's exit code, so pass it through stdout
-    out = self.adb("shell", f"({cmd}); echo $?", timeout=timeout, check=check).stdout
-    out, _, rc = out.rstrip().rpartition("\n")
+    r = self.adb("shell", f"({cmd}); echo $?", timeout=timeout, check=check)
+    out, _, rc = r.stdout.rstrip().rpartition("\n")
     if check and rc != "0":
-      raise subprocess.CalledProcessError(int(rc) if rc.isdigit() else -1, cmd, out)
+      e = subprocess.CalledProcessError(int(rc) if rc.isdigit() else -1, cmd, out, r.stderr)
+      e.add_note(f"stdout: {out.strip()}\nstderr: {r.stderr.strip()}")
+      raise e
     return out
 
   def push(self, src: str, dst: str) -> None:
