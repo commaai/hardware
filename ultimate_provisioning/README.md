@@ -1,6 +1,6 @@
 # ultimate provisioning
 
-The ultimate provisioning (UP) board is the comma four test and provisioning station in the factory.
+The ultimate provisioning (UP) board is the ultimate comma four debugger, used in both the factory and developers' desks.
 The device under test (DUT) plugs into the UP's OBD-C and aux USB ports.
 
 ```python

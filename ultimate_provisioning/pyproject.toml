@@ -1,6 +1,6 @@
 [project]
 name = "comma-ultimate-provisioning"
-version = "0.1.0"
+version = "1.0"
 description = "Interface for the comma ultimate provisioning (UP) board"
 requires-python = ">=3.11"
 dependencies = []
