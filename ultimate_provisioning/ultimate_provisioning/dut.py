@@ -99,13 +99,17 @@ class DUT:
           raise
         print(f"boot failed, retrying: {e}")
 
-  def enter_qdl(self, timeout: float = 30) -> None:
-    self.up.enter_qdl()
-    st = time.monotonic()
-    while not self.in_qdl():
-      if time.monotonic() - st > timeout:
-        raise TimeoutError(f"DUT didn't enter QDL in {timeout}s")
-      time.sleep(0.5)
+  def enter_qdl(self, timeout: float = 15, tries: int = 3) -> None:
+    # a comma 3X occasionally boots normally instead, power cycling it again gets it there
+    for i in range(tries):
+      self.up.enter_qdl()
+      st = time.monotonic()
+      while not self.in_qdl() and time.monotonic() - st < timeout:
+        time.sleep(0.5)
+      if self.in_qdl():
+        return
+      print(f"DUT didn't enter QDL in {timeout}s" + (", retrying" if i < tries - 1 else ""))
+    raise TimeoutError(f"DUT didn't enter QDL in {tries} tries")
 
   def flash(self, timeout: float = 300) -> None:
     """Reflash AGNOS from openpilot master to both slots over QDL, and boot slot a. Keeps /data, see flash.py."""
