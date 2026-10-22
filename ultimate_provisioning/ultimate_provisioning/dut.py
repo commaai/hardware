@@ -4,6 +4,7 @@ import time
 from enum import Enum
 from pathlib import Path
 
+from ultimate_provisioning import flash
 from ultimate_provisioning.board import DUT_IP, HOST_IP, UP
 
 PACKAGE_PATH = "/data/ultimate_provisioning"  # where install_package puts this package on the DUT, for PYTHONPATH
@@ -103,8 +104,20 @@ class DUT:
           raise
         print(f"boot failed, retrying: {e}")
 
-  def enter_qdl(self) -> None:
+  def enter_qdl(self, timeout: float = 30) -> None:
     self.up.enter_qdl()
+    st = time.monotonic()
+    while not self.in_qdl():
+      if time.monotonic() - st > timeout:
+        raise TimeoutError(f"DUT didn't enter QDL in {timeout}s")
+      time.sleep(0.5)
+
+  def flash(self, timeout: float = 300) -> None:
+    """Reflash AGNOS from openpilot master to both slots over QDL, and boot slot a. Keeps /data, see flash.py."""
+    cmd = flash.prepare()
+    self.enter_qdl()
+    subprocess.run(cmd, timeout=1800, check=True)
+    self.wait_for_boot(timeout)  # the first boot of a freshly flashed slot is slow
 
   def setup_power(self) -> None:
     """Stop the DUT from charging from or backfeeding into the UP's aux port. Doesn't persist across DUT reboots."""

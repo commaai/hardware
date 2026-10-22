@@ -39,6 +39,10 @@ For CI:
 - `python -m ultimate_provisioning serve` serves the UP's harness and CAN to tests on the DUT over XML-RPC, on port 8722.
   On the DUT, `UP.remote()` connects to it, with `PYTHONPATH=/data/ultimate_provisioning`
 - `python -m ultimate_provisioning release` stops it, or a CAN replay, and floats the harness lines
+- `python -m ultimate_provisioning flash` reflashes the DUT's OS over QDL, from openpilot master's AGNOS manifest
+  to both slots, and boots slot a. It keeps userdata (`/data`), persist, and the other non-A/B partitions.
+  On first use it installs bun and a pinned [qdl.js](https://github.com/commaai/qdl.js) into `/data/ultimate_provisioning_flash`,
+  where it also caches the images
 
 One thing drives the CAN at a time: `UP` takes a lock on its first CAN call, and fails if something else holds it.
 

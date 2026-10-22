@@ -54,6 +54,7 @@ def main() -> None:
   srv.add_argument("--foreground", action="store_true", help="don't go to the background")
   sub.add_parser("reboot", help="power cycle the DUT")
   sub.add_parser("qdl", help="power cycle the DUT into QDL")
+  sub.add_parser("flash", help="reflash AGNOS from openpilot master to both slots over QDL and boot it, keeping /data")
   sub.add_parser("off", help="power off the DUT")
   console = sub.add_parser("console", help="the DUT's serial console, ctrl-] to quit (login: comma/comma)")
   console.add_argument("--login", action="store_true", help="log in first, as comma/comma like on every DUT")
@@ -97,6 +98,9 @@ def main() -> None:
     dut.boot()
   elif args.command == "qdl":
     dut.enter_qdl()
+  elif args.command == "flash":
+    dut.flash()
+    print("AGNOS", dut.shell("cat /VERSION").strip())
   elif args.command == "off":
     dut.off()
 
