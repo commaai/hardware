@@ -35,8 +35,9 @@ or `console --log` to just watch it, e.g. while the DUT boots. The login is `com
 
 For CI:
 - `python -m ultimate_provisioning ready` stops whatever an earlier run left driving the CAN, floats the harness lines,
-  then gets the DUT ready
-- `python -m ultimate_provisioning serve` serves the UP's harness and CAN to tests on the DUT over XML-RPC, on port 8722
+  then gets the DUT ready and copies this package to its `/data/ultimate_provisioning`
+- `python -m ultimate_provisioning serve` serves the UP's harness and CAN to tests on the DUT over XML-RPC, on port 8722.
+  On the DUT, `UP.remote()` connects to it, with `PYTHONPATH=/data/ultimate_provisioning`
 - `python -m ultimate_provisioning release` stops it, or a CAN replay, and floats the harness lines
 
 One thing drives the CAN at a time: `UP` takes a lock on its first CAN call, and fails if something else holds it.

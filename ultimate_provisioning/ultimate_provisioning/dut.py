@@ -4,12 +4,9 @@ import time
 from enum import Enum
 from pathlib import Path
 
-from ultimate_provisioning.board import UP
+from ultimate_provisioning.board import DUT_IP, HOST_IP, UP
 
-# addresses for the USB network between the UP and the DUT. not link-local,
-# since AGNOS's setup_keys only accept SSH from private networks
-HOST_IP = "10.254.254.1"
-DUT_IP = "10.254.254.2"
+PACKAGE_PATH = "/data/ultimate_provisioning"  # where install_package puts this package on the DUT, for PYTHONPATH
 
 
 class DUTState(Enum):
@@ -124,6 +121,11 @@ class DUT:
     # rewriting AdbEnabled restarts the USB gadget, so only write it if needed
     self.shell(f"mkdir -p /data/params/d && if [ \"$(cat {adb} 2>/dev/null)\" != 1 ]; then echo -n 1 > {adb}; fi && "
                f"if cmp -s {keys} /usr/comma/setup_keys; then echo '# ultimate_provisioning: keep adb enabled' >> {keys}; fi && sync")
+
+  def install_package(self) -> None:
+    """Copy this package to the DUT, for tests there to use UP.remote()."""
+    self.shell(f"rm -rf {PACKAGE_PATH} && mkdir -p {PACKAGE_PATH}")
+    self.push(str(Path(__file__).parent), PACKAGE_PATH)
 
   # *** network ***
 

@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import time
+import xmlrpc.client
 from collections import deque
 from enum import Enum
 from statistics import mean
@@ -12,6 +13,12 @@ from ultimate_provisioning.can import CAN, Lock, available_interfaces, configure
 
 VADC = "/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-00/c440000.qcom,spmi:qcom,pm8998@0:vadc@3100"
 INA_HWMON = "/sys/bus/i2c/devices/0-0040/hwmon/hwmon*"
+
+# addresses for the USB network between the UP and the DUT. not link-local,
+# since AGNOS's setup_keys only accept SSH from private networks
+HOST_IP = "10.254.254.1"
+DUT_IP = "10.254.254.2"
+PORT = 8722  # python -m ultimate_provisioning serve
 
 ORIENTATION_NONE, ORIENTATION_1, ORIENTATION_2 = 0, 1, 2
 
@@ -122,6 +129,13 @@ class UP:
     self.can = None
     if on_up():
       pin_can_irqs()
+
+  @staticmethod
+  def remote(ip: str = HOST_IP, port: int = PORT) -> xmlrpc.client.ServerProxy:
+    """The UP's harness and CAN from the DUT, served by `python -m ultimate_provisioning serve`. Same methods as a UP's."""
+    up = xmlrpc.client.ServerProxy(f"http://{ip}:{port}", allow_none=True, use_builtin_types=True)
+    up.ping()
+    return up
 
   def close(self) -> None:
     if self.can is not None:

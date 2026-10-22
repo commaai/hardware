@@ -2,15 +2,13 @@ import argparse
 import os
 import signal
 import sys
-import xmlrpc.client
 from xmlrpc.server import SimpleXMLRPCServer
 
 from ultimate_provisioning import can
-from ultimate_provisioning.board import UP
+from ultimate_provisioning.board import HOST_IP, PORT, UP
 from ultimate_provisioning.console import Console
-from ultimate_provisioning.dut import DUT, DUTState, HOST_IP
+from ultimate_provisioning.dut import DUT, DUTState
 
-PORT = 8722
 LOG_PATH = "/tmp/ultimate_provisioning_serve.log"
 
 
@@ -19,12 +17,10 @@ def serve(ip: str = HOST_IP, port: int = PORT, foreground: bool = False) -> None
   up = UP()
   up.set_harness_orientation(UP.HARNESS_ORIENTATION_1)
   up.set_can_speed_kbps(0, 500)  # opens the CAN, and takes its lock
-  server = SimpleXMLRPCServer((ip, port), allow_none=True, logRequests=False)
+  server = SimpleXMLRPCServer((ip, port), allow_none=True, logRequests=False, use_builtin_types=True)
   server.register_function(lambda: True, "ping")
-  for f in ("set_harness_orientation", "set_ignition", "set_can_speed_kbps", "can_clear"):
+  for f in ("set_harness_orientation", "set_ignition", "set_can_speed_kbps", "can_send", "can_send_many", "can_recv", "can_clear"):
     server.register_function(getattr(up, f), f)
-  server.register_function(lambda addr, dat, bus: up.can_send(addr, dat.data, bus), "can_send")
-  server.register_function(lambda: [(addr, xmlrpc.client.Binary(dat), bus) for addr, dat, bus in up.can_recv()], "can_recv")
 
   if not foreground:
     if os.fork():
@@ -50,7 +46,7 @@ def main() -> None:
   sub = parser.add_subparsers(dest="command", required=True)
   sub.add_parser("status", help="print the DUT's state")
   ready = sub.add_parser("ready", help="stop leftovers from earlier runs, boot the DUT if needed, "
-                                      "set up its power, USB network, and internet, and print its IP")
+                                      "set up its power, USB network, and internet, copy this package to it, and print its IP")
   ready.add_argument("--reboot", action="store_true", help="power cycle the DUT even if it's already up")
   sub.add_parser("release", help="stop the server or CAN replay, and float the harness lines")
   srv = sub.add_parser("serve", help="serve the UP's harness and CAN over XML-RPC on the USB network to the DUT, for the DUT's panda. "
@@ -93,6 +89,7 @@ def main() -> None:
       dut.boot()
     dut.setup_power()
     dut.setup_adb()
+    dut.install_package()
     ip = dut.setup_network()
     dut.share_internet()
     print(ip)
