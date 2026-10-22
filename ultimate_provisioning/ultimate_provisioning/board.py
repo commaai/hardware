@@ -9,9 +9,7 @@ from statistics import mean
 
 VADC = "/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-00/c440000.qcom,spmi:qcom,pm8998@0:vadc@3100"
 INA_HWMON = "/sys/bus/i2c/devices/0-0040/hwmon/hwmon*"
-GOLD_MAX_FREQ = "/sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq"
 CAN_CPU = 1  # the TCAN and SPI IRQs run here and our CAN users stay off it: no more RX FIFO overruns under bursty load
-GOLD_MAX_KHZ = 1209600  # AGNOS runs the gold cores at 2.65 GHz. at 1.2 GHz the SoC is ~17 C cooler under full CAN load, same CAN throughput
 
 
 def sudo_read(path: str) -> str:
@@ -121,7 +119,7 @@ def on_up() -> bool:
 
 
 class UP:
-  """The ultimate provisioning board. Constructing it only sets up the SoC (see setup_soc), the rest waits for a method call."""
+  """The ultimate provisioning board. Constructing it only pins the CAN IRQs (see pin_can_irqs), the rest waits for a method call."""
 
   def __init__(self):
     self.obd_c_pwr = GPIO(25)
@@ -132,16 +130,7 @@ class UP:
     self.usb_hub_reset = GPIO(134)
     self._ina_path = None
     if on_up():
-      self.setup_soc()
-
-  def setup_soc(self) -> None:
-    with open(GOLD_MAX_FREQ) as f:
-      if f.read().strip() != str(GOLD_MAX_KHZ):
-        sudo_write(GOLD_MAX_KHZ, GOLD_MAX_FREQ)
-    # AGNOS's gpio.service is a tici's: on the UP it exports the TCANs' GPIOs, then polls gpio33 20x/s forever, "activating"
-    if subprocess.run(["systemctl", "is-active", "gpio.service"], capture_output=True, text=True).stdout.strip() in ("active", "activating"):
-      subprocess.run(["sudo", "systemctl", "stop", "gpio.service"], check=True)
-    pin_can_irqs()
+      pin_can_irqs()
 
   # *** aux USB port ***
 
