@@ -7,6 +7,7 @@ import time
 import xmlrpc.client
 from collections import deque
 from enum import Enum
+from pathlib import Path
 from statistics import mean
 
 from ultimate_provisioning.can import CAN, Lock, available_interfaces, configure, on_up, pin_can_irqs
@@ -105,6 +106,16 @@ def raw_to_voltage(raw_uv: int, offset: float = 0) -> float:
   r1, r2, r_in = 24.9, 10, 60
   r_eq = (r2 * r_in) / (r2 + r_in)
   return ((raw_uv / 1e6) - offset) / (r_eq / (r1 + r_eq))
+
+
+def in_qdl() -> bool:
+  """Whether a DUT is on the UP's USB in QDL."""
+  for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
+    d = Path(d).parent
+    # comma's devices enumerate in QDL as 3801:9008
+    if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
+      return True
+  return False
 
 
 class UP:
@@ -309,12 +320,17 @@ class UP:
   def wait_for_disconnect(self) -> None:
     self.wait_for_power(-0.1, 0.1, 1, None)
 
-  def enter_qdl(self) -> None:
+  def enter_qdl(self, timeout: float = 10) -> None:
     print("enter qdl...")
     self.set_power(obd_c=False, aux=False)
     time.sleep(3.0)
+    # powered from the aux port alone, with the UP as its host, the DUT boots into QDL. a comma 3X boots normally
+    # if OBD-C comes on before it's there, so wait for it, then power OBD-C too
     self.set_power(obd_c=False, aux=True)
-    time.sleep(1.0)
+    self.set_aux_dfp()
+    st = time.monotonic()
+    while not in_qdl() and time.monotonic() - st < timeout:
+      time.sleep(0.1)
     self.set_power(obd_c=True, aux=True)
 
   def reboot(self) -> None:

@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 
 from ultimate_provisioning import flash
-from ultimate_provisioning.board import DUT_IP, HOST_IP, UP
+from ultimate_provisioning.board import DUT_IP, HOST_IP, UP, in_qdl
 
 PACKAGE_PATH = "/data/ultimate_provisioning"  # where install_package puts this package on the DUT, for PYTHONPATH
 
@@ -48,12 +48,7 @@ class DUT:
   # *** state ***
 
   def in_qdl(self) -> bool:
-    for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
-      d = Path(d).parent
-      # comma's devices enumerate in QDL as 3801:9008
-      if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
-        return True
-    return False
+    return in_qdl()
 
   def adb_online(self) -> bool:
     try:
