@@ -1,4 +1,5 @@
 import glob
+import shlex
 import subprocess
 import time
 from enum import Enum
@@ -135,6 +136,34 @@ class DUT:
     # rewriting AdbEnabled restarts the USB gadget, so only write it if needed
     self.shell(f"mkdir -p /data/params/d && if [ \"$(cat {adb} 2>/dev/null)\" != 1 ]; then echo -n 1 > {adb}; fi && "
                f"if cmp -s {keys} /usr/comma/setup_keys; then echo '# ultimate_provisioning: keep adb enabled' >> {keys}; fi && sync")
+
+  def setup_testing(self) -> None:
+    """Keep SSH available and stop software which competes with hardware tests, now and after reboot."""
+    setup = """#!/usr/bin/env bash
+set -e
+sudo abctl --set_success
+sudo mount -o rw,remount /
+trap 'sudo mount -o ro,remount /' EXIT
+sudo sed -i 's,/data/params/d/GithubSshKeys,/usr/comma/setup_keys,' /etc/ssh/sshd_config
+sudo systemctl daemon-reload
+sudo systemctl restart ssh
+sudo systemctl disable ssh-param-watcher.path ssh-param-watcher.service
+sudo mount -o ro,remount /
+trap - EXIT
+sudo systemctl stop power_monitor
+# Hold the internal panda out of reset.
+[ -d /sys/class/gpio/gpio49 ] || echo 49 | sudo tee /sys/class/gpio/export
+echo out | sudo tee /sys/class/gpio/gpio49/direction
+echo 1 | sudo tee /sys/class/gpio/gpio49/value
+"""
+    keepalive = """while true; do
+  if ! sudo systemctl is-active -q ssh; then sudo systemctl start ssh; fi
+  sleep 5
+done
+"""
+    self.shell(f"printf %s {shlex.quote(setup + keepalive)} > /data/continue.sh && chmod +x /data/continue.sh")
+    self.shell(setup + "\nif pgrep -f launch_chffrplus.sh > /dev/null; then sudo systemctl stop comma; fi", timeout=60)
+    self.shell(f"sudo date -u -s {shlex.quote(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()))}")
 
   def install_package(self) -> None:
     """Copy this package to the DUT, for tests there to use UP.remote()."""
