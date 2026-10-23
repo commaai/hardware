@@ -46,7 +46,7 @@ def main() -> None:
   sub = parser.add_subparsers(dest="command", required=True)
   sub.add_parser("status", help="print the DUT's state")
   ready = sub.add_parser("ready", help="stop leftovers from earlier runs, boot the DUT if needed, "
-                                      "set up its power, USB network, and internet, copy this package to it, and print its IP")
+                                      "prepare it for tests, set up its power, USB network, and internet, copy this package to it, and print its IP")
   ready.add_argument("--reboot", action="store_true", help="power cycle the DUT even if it's already up")
   sub.add_parser("release", help="stop the server or CAN replay, and float the harness lines")
   srv = sub.add_parser("serve", help="serve the UP's harness and CAN over XML-RPC on the USB network to the DUT, for the DUT's panda. "
@@ -90,6 +90,7 @@ def main() -> None:
       dut.boot()
     dut.setup_power()
     dut.setup_adb()
+    dut.setup_testing()
     dut.install_package()
     ip = dut.setup_network()
     dut.share_internet()
