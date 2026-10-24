@@ -108,6 +108,22 @@ def raw_to_voltage(raw_uv: int, offset: float = 0) -> float:
   return ((raw_uv / 1e6) - offset) / (r_eq / (r1 + r_eq))
 
 
+def daemonize(log_path: str, lock: Lock | None = None) -> None:
+  """Go to the background once the caller is ready: the caller's process exits 0 and this returns in a detached child,
+  logging to log_path. The child takes over lock, so stop_holder() finds it."""
+  if os.fork():
+    print(f"running in the background, logging to {log_path}", flush=True)
+    os._exit(0)
+  os.setsid()
+  log = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+  null = os.open(os.devnull, os.O_RDONLY)
+  os.dup2(null, 0)
+  os.dup2(log, 1)
+  os.dup2(log, 2)
+  if lock is not None:
+    lock.set_owner(os.getpid())
+
+
 def in_qdl() -> bool:
   """Whether a DUT is on the UP's USB in QDL."""
   for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
@@ -314,6 +330,10 @@ class UP:
       self.obd_c_pwr.set(obd_c)
     if aux is not None:
       self.set_aux_power(aux)
+
+  def set_panda_power(self, on: bool) -> None:
+    """Like a jungle's: power the DUT over OBD-C."""
+    self.set_power(obd_c=on)
 
   # *** DUT ***
 
