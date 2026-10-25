@@ -40,6 +40,8 @@ exit "$rc"
 """
 CLEANUP_TIMEOUT = STOP_TIMEOUT + 30
 CONNECT_LOCK = "/tmp/ultimate_provisioning_connect.lock"
+# the DUT doesn't take power from the UP's aux port, which powers it as the USB host, or give power to it
+SETUP_POWER = "echo 1 | sudo tee /sys/class/power_supply/battery/input_suspend && echo sink | sudo tee /sys/class/dual_role_usb/otg_default/power_role"
 
 
 class DUTState(Enum):
@@ -180,8 +182,9 @@ class DUT:
     self.wait_for_boot(timeout)  # the first boot of a freshly flashed slot is slow
 
   def setup_power(self) -> None:
-    """Stop the DUT from charging from or backfeeding into the UP's aux port. Doesn't persist across DUT reboots."""
-    self.shell("echo 1 | sudo tee /sys/class/power_supply/battery/input_suspend && echo sink | sudo tee /sys/class/dual_role_usb/otg_default/power_role")
+    """Stop the DUT from charging from or backfeeding into the UP's aux port, so it's powered from OBD-C only, like in
+    a car. Doesn't persist across DUT reboots, setup_testing() also does it at every boot."""
+    self.shell(SETUP_POWER)
 
   def setup_adb(self) -> None:
     """Keep adb (and the USB network) enabled across DUT reboots.
@@ -212,6 +215,7 @@ if grep -q /data/params/d/GithubSshKeys /etc/ssh/sshd_config || systemctl is-ena
   trap - EXIT
 fi
 sudo systemctl stop power_monitor
+""" + SETUP_POWER + """
 # hold the internal panda out of reset
 [ -d /sys/class/gpio/gpio49 ] || echo 49 | sudo tee /sys/class/gpio/export
 echo out | sudo tee /sys/class/gpio/gpio49/direction
