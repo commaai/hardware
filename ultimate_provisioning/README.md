@@ -13,6 +13,7 @@ up.get_power(seconds=1)              # DUT power draw on OBD-C (W)
 up.orientation_sbu1(ignition_on=True)
 up.read_sbu1_voltage()
 up.reset_obdc_gpio()                 # float all the SBU lines
+up.set_panda_power(True)             # DUT power over OBD-C, like a jungle
 
 # the harness and CAN for the DUT's panda, with the same API as a panda jungle. bus N is canN, see LANES
 up.set_harness_orientation(UP.HARNESS_ORIENTATION_1)
@@ -33,13 +34,27 @@ The DUT's serial console from the shell: `python -m ultimate_provisioning consol
 or `console --log` to just watch it, e.g. while the DUT boots. The login is `comma` / `comma` on every DUT,
 `console --login` logs in for you.
 
+Reaching the DUT, at a desk or in CI (`python -m ultimate_provisioning`, `up` below):
+- `up connect` makes the DUT reachable: boots it if needed, sets up its power, adb, the USB network (the DUT is at `DUT_IP`)
+  and internet, authorizes the UP's ssh key, and copies this package to the DUT's `/data/ultimate_provisioning`.
+  It doesn't change how the DUT behaves otherwise, e.g. openpilot still starts on boot
+- `up run [--cwd DIR] [--timeout S] [--env NAME]... [-- CMD]` runs a bash script on the DUT over ssh, from stdin or CMD,
+  after its login profile, in `--cwd` or the home directory. The script doesn't get stdin, and CMD is a shell script
+  like with ssh. `--env` passes a variable from the environment, like `docker -e`. It streams the output and
+  exits with the script's status. A timeout, ctrl-c, TERM or HUP stops the script on the DUT and waits for that.
+  `DUT().run(script, cwd=, env=, timeout=)` from Python. Both connect first if ssh to the DUT fails, e.g. after a reboot
+- `up ssh` is a shell on the DUT
+- while `up run` or `up ssh` runs, it lends the UP to the DUT: there, `UP.remote()` has the UP's methods, e.g. a panda test's
+  jungle, or `can_replay(frames)` to play a car's CAN. The UP opens on the first call and closes when they exit,
+  so a lost link or a killed test can't leave it in use
+- every ssh to the DUT goes through `SSH_CONFIG` (`/data/ultimate_provisioning_ssh/config`, host `dut`),
+  e.g. `rsync -e "ssh -F /data/ultimate_provisioning_ssh/config" ... dut:/data/`
+
 For CI:
-- `python -m ultimate_provisioning ready` stops whatever an earlier run left driving the CAN, floats the harness lines,
-  then gets the DUT ready and copies this package to its `/data/ultimate_provisioning`
-- `python -m ultimate_provisioning serve` serves the UP's harness and CAN to tests on the DUT over XML-RPC, on port 8722.
-  On the DUT, `UP.remote()` connects to it, with `PYTHONPATH=/data/ultimate_provisioning`
-- `python -m ultimate_provisioning release` stops it, or a CAN replay, and floats the harness lines
-- `python -m ultimate_provisioning flash` reflashes the DUT's OS over QDL, from openpilot master's AGNOS manifest
+- `up reset` puts the station back in a clean state: stops whatever drives the CAN, floats the harness lines, connects,
+  and prepares the DUT for tests (ssh with the setup keys on every boot, openpilot and the power monitor stopped,
+  leftovers from earlier tests removed). If that fails, it reflashes the DUT and tries once more
+- `up flash` reflashes the DUT's OS over QDL, from openpilot master's AGNOS manifest
   to both slots, and boots slot a. It keeps userdata (`/data`), persist, and the other non-A/B partitions.
   On first use it installs bun and a pinned [qdl.js](https://github.com/commaai/qdl.js) into `/data/ultimate_provisioning_flash`,
   where it also caches the images

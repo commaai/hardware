@@ -186,7 +186,7 @@ LOCK_PATH = "/tmp/ultimate_provisioning_can.lock"
 
 
 class Lock:
-  """An flock on the UP's CAN lanes, held by whatever is driving them, e.g. the XML-RPC server or a CAN replay."""
+  """An flock on the UP's CAN lanes, held by whatever is driving them, e.g. an `up run`."""
 
   def __init__(self) -> None:
     self.fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o666)
@@ -200,11 +200,8 @@ class Lock:
       os.close(self.fd)
       pid = lock_holder()
       raise RuntimeError(f"the UP's CAN is in use by pid {pid} ({_cmdline(pid)}), see {LOCK_PATH}") from None
-    self.set_owner(os.getpid())
-
-  def set_owner(self, pid: int) -> None:
     os.ftruncate(self.fd, 0)
-    os.pwrite(self.fd, str(pid).encode(), 0)
+    os.pwrite(self.fd, str(os.getpid()).encode(), 0)
 
   def close(self) -> None:
     os.close(self.fd)
@@ -226,7 +223,7 @@ def lock_holder() -> int | None:
 
 
 def stop_holder(timeout: float = 5) -> None:
-  """Stop whatever holds the CAN lock, e.g. an XML-RPC server or CAN replay left over from an earlier run."""
+  """Stop whatever holds the CAN lock, e.g. an `up run` left over from an earlier job."""
   pid = lock_holder()
   if pid is None:
     return

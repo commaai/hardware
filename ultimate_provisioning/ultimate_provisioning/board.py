@@ -1,12 +1,16 @@
+import contextlib
 import errno
 import glob
+import itertools
 import os
 import re
+import socket
 import subprocess
+import threading
 import time
-import xmlrpc.client
 from collections import deque
 from enum import Enum
+from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from statistics import mean
 
@@ -19,7 +23,6 @@ INA_HWMON = "/sys/bus/i2c/devices/0-0040/hwmon/hwmon*"
 # since AGNOS's setup_keys only accept SSH from private networks
 HOST_IP = "10.254.254.1"
 DUT_IP = "10.254.254.2"
-PORT = 8722  # python -m ultimate_provisioning serve
 
 ORIENTATION_NONE, ORIENTATION_1, ORIENTATION_2 = 0, 1, 2
 
@@ -141,17 +144,23 @@ class UP:
     self.ignition = False
     self.lock = None
     self.can = None
+    self._replay = None
     if on_up():
       pin_can_irqs()
 
   @staticmethod
-  def remote(ip: str = HOST_IP, port: int = PORT) -> xmlrpc.client.ServerProxy:
-    """The UP's harness and CAN from the DUT, served by `python -m ultimate_provisioning serve`. Same methods as a UP's."""
-    up = xmlrpc.client.ServerProxy(f"http://{ip}:{port}", allow_none=True, use_builtin_types=True)
-    up.ping()
-    return up
+  def remote() -> "Remote":
+    """The UP, from a script on its DUT that `up run` or `up ssh` started: they lend the UP to it until they exit."""
+    if "UP_REMOTE" not in os.environ:
+      raise RuntimeError("no UP here: run this on the DUT with `up run` or `up ssh` on its UP")
+    host, port, key = os.environ["UP_REMOTE"].split(":")
+    return Remote(Client((host, int(port)), authkey=key.encode()))
 
   def close(self) -> None:
+    if self._replay is not None:
+      self._replay[1].set()
+      self._replay[0].join()
+      self._replay = None
     if self.can is not None:
       self.can.close()
       self.can = None
@@ -272,6 +281,20 @@ class UP:
   def can_recv(self) -> list[tuple[int, bytes, int]]:
     return self._can().can_recv()
 
+  def can_replay(self, frames: list) -> None:
+    """Like a car: send frames[i], each a list for can_send_many(), every 10 ms in a loop, in the background until close()."""
+    stop = threading.Event()
+    def loop():
+      t = time.monotonic()
+      for frame in itertools.cycle(frames):
+        self.can_send_many(frame)
+        self.can_recv()
+        t += 0.01
+        if stop.wait(max(0, t - time.monotonic())):
+          return
+    self._replay = (threading.Thread(target=loop, daemon=True), stop)
+    self._replay[0].start()
+
   def can_clear(self, bus: int) -> None:
     can = self._can()
     if bus == 0xFFFF:
@@ -315,6 +338,10 @@ class UP:
     if aux is not None:
       self.set_aux_power(aux)
 
+  def set_panda_power(self, on: bool) -> None:
+    """Like a jungle's: power the DUT over OBD-C."""
+    self.set_power(obd_c=on)
+
   # *** DUT ***
 
   def is_connected(self) -> bool:
@@ -341,3 +368,50 @@ class UP:
     self.set_power(obd_c=False, aux=False)
     time.sleep(3.0)
     self.set_power(obd_c=True, aux=False)
+
+
+class Remote:
+  """A UP's methods from its DUT, see UP.remote(). A UP error raises a RuntimeError, a lost link an OSError or EOFError."""
+
+  def __init__(self, conn):
+    self.conn, self.mu = conn, threading.Lock()
+
+  def __getattr__(self, name: str):
+    def call(*args, **kwargs):
+      with self.mu:
+        self.conn.send((name, args, kwargs))
+        ok, result = self.conn.recv()
+      if not ok:
+        raise RuntimeError(result)
+      return result
+    return call
+
+
+@contextlib.contextmanager
+def lend():
+  """Lend this UP to the DUT in the with block, over the USB network: yields UP_REMOTE, for UP.remote() there. It serves one
+  connection at a time. The UP opens on the first call and closes after the block, which frees the CAN and stops a can_replay()."""
+  key = os.urandom(16).hex()
+  listener, closing, up = Listener((HOST_IP, 0), authkey=key.encode()), threading.Event(), None
+
+  def serve():
+    nonlocal up
+    while not closing.is_set():
+      with contextlib.suppress(Exception), listener.accept() as conn:
+        while True:
+          name, args, kwargs = conn.recv()
+          try:
+            up = up or UP()
+            conn.send((True, getattr(up, name)(*args, **kwargs)))
+          except Exception as e:
+            conn.send((False, f"{type(e).__name__}: {e}"))
+
+  threading.Thread(target=serve, daemon=True).start()
+  try:
+    yield f"{HOST_IP}:{listener.address[1]}:{key}"
+  finally:
+    closing.set()
+    socket.create_connection(listener.address).close()  # wakes accept()
+    listener.close()
+    if up is not None:
+      up.close()
