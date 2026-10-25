@@ -43,7 +43,10 @@ Reaching the DUT, at a desk or in CI (`python -m ultimate_provisioning`, `up` be
   like with ssh. `--env` passes a variable from the environment, like `docker -e`. It streams the output and
   exits with the script's status. A timeout, ctrl-c, TERM or HUP stops the script on the DUT and waits for that.
   `DUT().run(script, cwd=, env=, timeout=)` from Python. Both connect first if ssh to the DUT fails, e.g. after a reboot
-- `up ssh` is a shell on the DUT, `up ssh -- CMD` runs one command
+- `up ssh` is a shell on the DUT
+- while `up run` or `up ssh` runs, it lends the UP to the DUT: there, `UP.remote()` has the UP's methods, e.g. a panda test's
+  jungle, or `can_replay(frames)` to play a car's CAN. The UP opens on the first call and closes when they exit,
+  so a lost link or a killed test can't leave it in use
 - every ssh to the DUT goes through `SSH_CONFIG` (`/data/ultimate_provisioning_ssh/config`, host `dut`),
   e.g. `rsync -e "ssh -F /data/ultimate_provisioning_ssh/config" ... dut:/data/`
 
@@ -51,10 +54,6 @@ For CI:
 - `up reset` puts the station back in a clean state: stops whatever drives the CAN, floats the harness lines, connects,
   and prepares the DUT for tests (ssh with the setup keys on every boot, openpilot and the power monitor stopped,
   leftovers from earlier tests removed). If that fails, it reflashes the DUT and tries once more
-- `up serve` serves the UP's harness and CAN to tests on the DUT over XML-RPC, on port 8722, in the background.
-  On the DUT, `UP.remote()` connects to it, with `PYTHONPATH=/data/ultimate_provisioning`
-- `daemonize(log_path, lock)` sends a CAN user like `serve` or openpilot's `can_replay.py --up` to the background
-  once it's ready, so `reset` can stop it
 - `up flash` reflashes the DUT's OS over QDL, from openpilot master's AGNOS manifest
   to both slots, and boots slot a. It keeps userdata (`/data`), persist, and the other non-A/B partitions.
   On first use it installs bun and a pinned [qdl.js](https://github.com/commaai/qdl.js) into `/data/ultimate_provisioning_flash`,

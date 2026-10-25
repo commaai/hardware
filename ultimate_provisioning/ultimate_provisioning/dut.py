@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 
 from ultimate_provisioning import can, flash
-from ultimate_provisioning.board import DUT_IP, HOST_IP, UP, in_qdl
+from ultimate_provisioning.board import DUT_IP, HOST_IP, UP, in_qdl, lend
 
 PACKAGE_PATH = "/data/ultimate_provisioning"  # where install_package puts this package on the DUT, for PYTHONPATH
 
@@ -322,34 +322,45 @@ systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
       print("ssh to the DUT fails, connecting", file=sys.stderr, flush=True)
       self.connect()
 
+  def prelude(self, up_remote: str, cwd: str | None = None, env: dict[str, str] | None = None) -> str:
+    """What a shell on the DUT runs first: its login profile, quietly (the DUT's ~/.bash_profile prints tmux errors, and
+    may cd), then cd, env, and UP.remote()'s."""
+    return ("for f in /etc/profile ~/.bash_profile; do if [ -f \"$f\" ]; then source \"$f\" >/dev/null 2>&1; fi; done\n"
+            f"cd {shlex.quote(cwd) if cwd is not None else '~'} || exit 1\n" +
+            "".join(f"export {k}={shlex.quote(v)}\n" for k, v in (env or {}).items()) +
+            f"export UP_REMOTE={up_remote} PYTHONPATH={PACKAGE_PATH}${{PYTHONPATH:+:$PYTHONPATH}}\n")
+
+  def interact(self) -> int:
+    """An interactive shell on the DUT, set up like run()'s scripts."""
+    self.ensure_connected()
+    with lend() as up_remote:
+      return subprocess.call(self.ssh_cmd("-t", "dut", f"exec bash --rcfile <(printf %s {shlex.quote(self.prelude(up_remote))}) -i"))
+
   def run(self, script: str, cwd: str | None = None, env: dict[str, str] | None = None, timeout: float | None = None) -> int:
     """Run a bash script on the DUT over ssh, after its login profile, streaming its output, and return its exit status.
     On a timeout or an exception like KeyboardInterrupt, stops it, waits for it to clean up, and raises."""
     self.ensure_connected()
-    lock = f"/tmp/up_run.{uuid.uuid4().hex[:12]}.lock"
-    # the login profile is quiet, e.g. the DUT's ~/.bash_profile prints tmux errors, and may cd
-    prelude = "for f in /etc/profile ~/.bash_profile; do if [ -f \"$f\" ]; then source \"$f\" >/dev/null 2>&1; fi; done\n"
-    prelude += f"cd {shlex.quote(cwd) if cwd is not None else '~'} || exit 1\n"
-    prelude += "".join(f"export {k}={shlex.quote(v)}\n" for k, v in (env or {}).items())
-    data = (prelude + script).encode()
-    remote = f"exec setpriv --pdeathsig HUP flock --no-fork {lock} bash -c {shlex.quote(SUPERVISOR)} up_run {len(data)}"
-    sys.stdout.flush()
-    p = subprocess.Popen(self.ssh_cmd("dut", remote), stdin=subprocess.PIPE)
-    try:
-      # then stdin stays open: its EOF tells the remote side the ssh went away
-      p.stdin.write(data)
-      p.stdin.flush()
-      rc = p.wait(timeout)
-    except BaseException as e:
+    with lend() as up_remote:  # the script can use the UP
+      lock = f"/tmp/up_run.{uuid.uuid4().hex[:12]}.lock"
+      data = (self.prelude(up_remote, cwd, env) + script).encode()
+      remote = f"exec setpriv --pdeathsig HUP flock --no-fork {lock} bash -c {shlex.quote(SUPERVISOR)} up_run {len(data)}"
+      sys.stdout.flush()
+      p = subprocess.Popen(self.ssh_cmd("dut", remote), stdin=subprocess.PIPE)
+      try:
+        # then stdin stays open: its EOF tells the remote side the ssh went away
+        p.stdin.write(data)
+        p.stdin.flush()
+        rc = p.wait(timeout)
+      except BaseException as e:
+        p.stdin.close()
+        p.kill()
+        p.wait()
+        if self.ssh_run(f"flock {lock} true", timeout=CLEANUP_TIMEOUT).returncode != 0:
+          raise RuntimeError(f"the DUT didn't stop the script in {CLEANUP_TIMEOUT}s") from e
+        if isinstance(e, subprocess.TimeoutExpired):
+          raise TimeoutError(f"timed out after {timeout}s") from None
+        raise
       p.stdin.close()
-      p.kill()
-      p.wait()
-      if self.ssh_run(f"flock {lock} true", timeout=CLEANUP_TIMEOUT).returncode != 0:
-        raise RuntimeError(f"the DUT didn't stop the script in {CLEANUP_TIMEOUT}s") from e
-      if isinstance(e, subprocess.TimeoutExpired):
-        raise TimeoutError(f"timed out after {timeout}s") from None
-      raise
-    p.stdin.close()
-    if rc == 255:
-      print("lost the ssh connection to the DUT, did it reboot?", file=sys.stderr, flush=True)
-    return rc
+      if rc == 255:
+        print("lost the ssh connection to the DUT, did it reboot?", file=sys.stderr, flush=True)
+      return rc
