@@ -39,7 +39,8 @@ Reaching the DUT, at a desk or in CI (`python -m ultimate_provisioning`, `up` be
   and internet, authorizes the UP's ssh key, and copies this package to the DUT's `/data/ultimate_provisioning`.
   It doesn't change how the DUT behaves otherwise, e.g. openpilot still starts on boot
 - `up run [--cwd DIR] [--timeout S] [--env NAME]... [-- CMD]` runs a bash script on the DUT over ssh, from stdin or CMD,
-  after its login profile. `--env` passes a variable from the environment, like `docker -e`. It streams the output and
+  after its login profile, in `--cwd` or the home directory. The script doesn't get stdin, and CMD is a shell script
+  like with ssh. `--env` passes a variable from the environment, like `docker -e`. It streams the output and
   exits with the script's status. A timeout, ctrl-c, TERM or HUP stops the script on the DUT and waits for that.
   `DUT().run(script, cwd=, env=, timeout=)` from Python. Both connect first if ssh to the DUT fails, e.g. after a reboot
 - `up ssh` is a shell on the DUT, `up ssh -- CMD` runs one command

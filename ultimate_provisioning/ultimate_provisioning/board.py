@@ -3,6 +3,7 @@ import glob
 import os
 import re
 import subprocess
+import sys
 import time
 import xmlrpc.client
 from collections import deque
@@ -111,6 +112,8 @@ def raw_to_voltage(raw_uv: int, offset: float = 0) -> float:
 def daemonize(log_path: str, lock: Lock | None = None) -> None:
   """Go to the background once the caller is ready: the caller's process exits 0 and this returns in a detached child,
   logging to log_path. The child takes over lock, so stop_holder() finds it."""
+  sys.stdout.flush()  # or the child writes it again
+  sys.stderr.flush()
   if os.fork():
     print(f"running in the background, logging to {log_path}", flush=True)
     os._exit(0)
@@ -120,6 +123,7 @@ def daemonize(log_path: str, lock: Lock | None = None) -> None:
   os.dup2(null, 0)
   os.dup2(log, 1)
   os.dup2(log, 2)
+  sys.stdout.reconfigure(line_buffering=True)
   if lock is not None:
     lock.set_owner(os.getpid())
 

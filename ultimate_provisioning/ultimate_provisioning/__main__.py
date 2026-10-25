@@ -18,7 +18,8 @@ def serve(ip: str = HOST_IP, port: int = PORT, foreground: bool = False) -> None
   up.set_can_speed_kbps(0, 500)  # opens the CAN, and takes its lock
   server = SimpleXMLRPCServer((ip, port), allow_none=True, logRequests=False, use_builtin_types=True)
   server.register_function(lambda: True, "ping")
-  for f in ("set_harness_orientation", "set_ignition", "set_can_speed_kbps", "can_send", "can_send_many", "can_recv", "can_clear"):
+  for f in ("set_harness_orientation", "set_ignition", "set_can_speed_kbps", "can_send", "can_send_many", "can_recv", "can_clear",
+            "set_panda_power"):
     server.register_function(getattr(up, f), f)
 
   if not foreground:

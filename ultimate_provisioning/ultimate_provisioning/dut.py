@@ -1,4 +1,6 @@
+import fcntl
 import glob
+import os
 import shlex
 import subprocess
 import sys
@@ -20,17 +22,24 @@ SSH_CONFIG = SSH_DIR / "config"
 # listed in every AGNOS sshd_config's AuthorizedKeysFile, and gone after a reboot, so connect() puts the key back
 AUTHORIZED_KEYS = "/tmp/authorized_keys"
 
-# run()'s remote side: the script runs in the background, so a HUP (the ssh going away: setpriv's pdeathsig, or EOF on
-# stdin when the ssh was multiplexed) stops its whole process group. The lock is held until every process in it is gone
-SUPERVISOR = """trap '' PIPE; trap : TERM
-trap 'trap - HUP; kill -TERM 0; wait "$child"; exit 129' HUP
-(trap - PIPE; exec bash -c "$1") </dev/null & child=$!
-{ while read -r _; do :; done; kill -HUP $$; } <&0 & watch=$!
+# run()'s remote side. The script comes first on stdin, $1 bytes of it, into a file only this user can read: not argv,
+# which any process can read and is limited to 128 KiB. It runs in the background, so a HUP (the ssh going away:
+# setpriv's pdeathsig, or EOF on the rest of stdin when the ssh was multiplexed) stops its whole process group, with a
+# TERM and STOP_TIMEOUT seconds later a KILL. The lock is held until every process in it is gone
+STOP_TIMEOUT = 30
+SUPERVISOR = f"""trap '' PIPE; trap : TERM
+f=$(mktemp); trap 'rm -f "$f"' EXIT
+head -c "$1" > "$f"; [ "$(stat -c %s "$f")" = "$1" ] || exit 255
+stop() {{ kill -TERM 0; for _ in $(seq {STOP_TIMEOUT}); do kill -0 "$child" 2>/dev/null || break; sleep 1; done; rm -f "$f"; kill -KILL 0; }}
+trap 'trap "" HUP; stop' HUP
+(trap - PIPE; exec bash "$f") </dev/null & child=$!
+{{ while read -r _; do :; done; kill -HUP $$; }} <&0 & watch=$!
 while wait "$child"; rc=$?; kill -0 "$child" 2>/dev/null; do :; done
 kill "$watch" 2>/dev/null
 exit "$rc"
 """
-CLEANUP_TIMEOUT = 60
+CLEANUP_TIMEOUT = STOP_TIMEOUT + 30
+CONNECT_LOCK = "/tmp/ultimate_provisioning_connect.lock"
 
 
 class DUTState(Enum):
@@ -48,6 +57,11 @@ class DUT:
 
   def connect(self) -> None:
     """Make the DUT reachable over adb and ssh, booting it if needed. Doesn't change how the DUT behaves otherwise."""
+    with open(CONNECT_LOCK, "w") as lock:
+      fcntl.flock(lock, fcntl.LOCK_EX)  # one at a time, or they'd each boot the DUT
+      self._connect()
+
+  def _connect(self) -> None:
     if self.state() != DUTState.UP:
       self.boot()
     self.wait_for_boot()  # adb comes up before the rest, e.g. sshd
@@ -208,7 +222,8 @@ echo 1 | sudo tee /sys/class/gpio/gpio49/value
   sleep 5
 done
 """
-    clean = """if pgrep -f launch_chffrplus.sh > /dev/null; then sudo systemctl stop comma; fi
+    clean = """for l in /tmp/up_run.*.lock; do if [ -e "$l" ]; then fuser -s -k -KILL "$l" || true; rm -f "$l"; fi; done  # run()s that didn't stop
+if pgrep -f launch_chffrplus.sh > /dev/null; then sudo systemctl stop comma; fi
 rm -rf /tmp/tmp* ~comma/.commacache /dev/shm/* /dev/tmp/tmp* /data/media/0/realdata/*
 if [ -d /data/safe_staging ]; then sudo umount /data/safe_staging/merged 2>/dev/null || true; rm -rf /data/safe_staging; fi
 systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
@@ -223,7 +238,7 @@ systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
     SSH_DIR.mkdir(mode=0o700, exist_ok=True)
     if not SSH_KEY.exists():
       subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "ultimate_provisioning", "-f", str(SSH_KEY)], check=True)
-    SSH_CONFIG.write_text(f"""Host dut
+    config = f"""Host dut
   HostName {DUT_IP}
   User comma
   IdentityFile {SSH_KEY}
@@ -238,8 +253,12 @@ systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
   ControlMaster auto
   ControlPath /tmp/ultimate_provisioning_ssh_%C
   ControlPersist 10m
-""")
-    SSH_CONFIG.chmod(0o644)
+"""
+    if not SSH_CONFIG.exists() or SSH_CONFIG.read_text() != config:
+      tmp = SSH_CONFIG.with_suffix(".tmp")
+      tmp.write_text(config)
+      tmp.chmod(0o644)
+      os.replace(tmp, SSH_CONFIG)  # while other ssh read it
     key = shlex.quote(SSH_KEY.with_suffix(".pub").read_text().strip())
     self.shell(f"grep -qxF {key} {AUTHORIZED_KEYS} 2>/dev/null || echo {key} >> {AUTHORIZED_KEYS}; chmod 644 {AUTHORIZED_KEYS} && "
                "{ systemctl is-active -q ssh || sudo systemctl start ssh; }")
@@ -308,15 +327,18 @@ systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
     On a timeout or an exception like KeyboardInterrupt, stops it, waits for it to clean up, and raises."""
     self.ensure_connected()
     lock = f"/tmp/up_run.{uuid.uuid4().hex[:12]}.lock"
-    prelude = "for f in ~/.bash_profile /etc/profile; do if [ -f \"$f\" ]; then source \"$f\"; fi; done\n"
-    if cwd is not None:
-      prelude += f"cd {shlex.quote(cwd)}\n"
+    # the login profile is quiet, e.g. the DUT's ~/.bash_profile prints tmux errors, and may cd
+    prelude = "for f in /etc/profile ~/.bash_profile; do if [ -f \"$f\" ]; then source \"$f\" >/dev/null 2>&1; fi; done\n"
+    prelude += f"cd {shlex.quote(cwd) if cwd is not None else '~'} || exit 1\n"
     prelude += "".join(f"export {k}={shlex.quote(v)}\n" for k, v in (env or {}).items())
-    remote = f"exec setpriv --pdeathsig HUP flock --no-fork {lock} bash -c {shlex.quote(SUPERVISOR)} up_run {shlex.quote(prelude + script)}"
-    # stdin stays open: its EOF tells the remote side the ssh went away
+    data = (prelude + script).encode()
+    remote = f"exec setpriv --pdeathsig HUP flock --no-fork {lock} bash -c {shlex.quote(SUPERVISOR)} up_run {len(data)}"
     sys.stdout.flush()
     p = subprocess.Popen(self.ssh_cmd("dut", remote), stdin=subprocess.PIPE)
     try:
+      # then stdin stays open: its EOF tells the remote side the ssh went away
+      p.stdin.write(data)
+      p.stdin.flush()
       rc = p.wait(timeout)
     except BaseException as e:
       p.stdin.close()
