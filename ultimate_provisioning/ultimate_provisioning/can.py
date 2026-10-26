@@ -219,10 +219,11 @@ class CAN:
     return messages
 
   def can_recv(self, timeout: float = 0.0) -> list[tuple[int, bytes, int]]:
-    """Wait for public RX, returning a bounded batch. Restart/close cancels the wait."""
+    """Wait for public RX, then drain queued frames. Restart/close cancels the wait."""
     deadline = time.monotonic() + timeout
     waiter = None
     read_fd = write_fd = None
+    messages = []
     try:
       while True:
         with self._mu:
@@ -235,7 +236,6 @@ class CAN:
               pass
             else:
               return []
-          messages = []
           for buffered in self._received.values():
             messages.extend(buffered)
             buffered.clear()
@@ -243,6 +243,10 @@ class CAN:
             return messages
           for key, _ in self._selector.select(0):
             messages.extend(self._read(key.data))
+          # Internal batches release the state lock without changing the public
+          # drain contract. Confirmations alone must not hide queued public RX.
+          if self._selector.select(0):
+            continue
           remaining = deadline - time.monotonic()
           if messages or remaining <= 0:
             return messages

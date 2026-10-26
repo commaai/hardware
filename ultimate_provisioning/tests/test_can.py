@@ -80,6 +80,28 @@ class TestCAN(unittest.TestCase):
     self.configure.reset_mock()
     return self.can._sockets[bus]
 
+  def test_public_receive_drains_past_confirmation_batches(self):
+    sock = self.reset()
+    for _ in range(2 * _RX_BATCH):
+      self.can.can_send(0x123, b'a', 0)
+      sock.receive()
+    for _ in range(2 * _RX_BATCH):
+      sock.receive(flags=0, address=0x456)
+    self.assertEqual(self.can.can_recv(), [(0x456, b'a', 0)] * (2 * _RX_BATCH))
+    self.assertEqual(self.can.can_recv(), [])
+    self.can.can_clear(0, 500000)
+    self.configure.assert_not_called()
+
+  def test_up_rx_clear_drains_all_batches(self):
+    sock = self.reset()
+    for _ in range(2 * _RX_BATCH):
+      sock.receive(flags=0, address=0x456)
+    up = UP.__new__(UP)
+    up._can_mu = threading.RLock()
+    up.can = self.can
+    up.can_clear(0xFFFF)
+    self.assertEqual(self.can.can_recv(), [])
+
   def test_unknown_initial_state(self):
     self.can.can_clear(0, 500000)
     self.configure.assert_called_once_with(['can0'], 500000)
@@ -418,7 +440,7 @@ class TestReceiveWaiting(unittest.TestCase):
     self.assertEqual(self.results, [[]])
     self.assertEqual(self.can.can_recv(), [(0x456, b'a', 0)])
 
-  def test_queued_rx_is_batched_without_loss(self):
+  def test_queued_rx_is_drained_without_loss(self):
     self.peers[-1].settimeout(1)
     def produce():
       try:
@@ -432,7 +454,6 @@ class TestReceiveWaiting(unittest.TestCase):
     deadline = time.monotonic() + 2
     while len(received) < 2 * _RX_BATCH and time.monotonic() < deadline:
       batch = self.can.can_recv(0.25)
-      self.assertLessEqual(len(batch), _RX_BATCH)
       received.extend(batch)
     producer.join(2)
     self.assertFalse(producer.is_alive())

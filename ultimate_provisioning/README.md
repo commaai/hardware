@@ -105,8 +105,8 @@ the state lock, continues waiting after internal confirmations, and returns an
 empty batch when a restart or close cancels its wait. Interface names must be
 unique, including in explicit bus mappings.
 
-Receive calls read at most 256 datagrams per lane per batch; callers draining RX
-should receive until empty. TX clear also reads at most 256 datagrams per lane
+Receive calls drain queued frames, processing internal batches without holding
+the state lock for the whole drain. TX clear reads at most 256 datagrams per lane
 and buffers at most 256 public RX messages until the next receive. If that budget
 is exhausted before TX is confirmed, clear conservatively resets the lane.
 Already buffered public RX survives the reset; unread kernel RX can be discarded
