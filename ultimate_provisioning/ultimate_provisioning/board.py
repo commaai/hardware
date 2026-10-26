@@ -14,7 +14,7 @@ from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from statistics import mean
 
-from ultimate_provisioning.can import CAN, Lock, available_interfaces, on_up, pin_can_irqs
+from ultimate_provisioning.can import CAN, Lock, available_interfaces, configure, on_up, pin_can_irqs
 
 VADC = "/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-00/c440000.qcom,spmi:qcom,pm8998@0:vadc@3100"
 INA_HWMON = "/sys/bus/i2c/devices/0-0040/hwmon/hwmon*"
@@ -157,6 +157,7 @@ class UP:
     self.lock = None
     self.can = None
     self._can_mu = threading.RLock()
+    self._can_tx_dirty: set[str] = set()
     self._replay = None
     if on_up():
       pin_can_irqs()
@@ -174,14 +175,13 @@ class UP:
       self._replay[1].set()
       self._replay[0].join()
       self._replay = None
-    with self._can_mu:
-      if self.can is not None:
-        self.can.close()
-        self.can = None
-        self.reset_obdc_gpio()
-      if self.lock is not None:
-        self.lock.close()
-        self.lock = None
+    if self.can is not None:
+      self.can.close()
+      self.can = None
+      self.reset_obdc_gpio()
+    if self.lock is not None:
+      self.lock.close()
+      self.lock = None
 
   # *** aux USB port ***
 
@@ -259,20 +259,19 @@ class UP:
         self.lock = self.lock or Lock()
         self.interfaces = available_interfaces()
         self.bitrates = dict.fromkeys(self.interfaces, 500_000)
-        try:
-          self._restart_can(self.interfaces)
-        except BaseException:
-          if self.can is not None:
-            self.can.close()
-            self.can = None
-          raise
+        self._restart_can(self.interfaces)
       return self.can
 
   def _restart_can(self, interfaces: list[str]) -> None:
-    if self.can is None:
+    with self._can_mu:
+      # down and up drops the frames stuck in the TX FIFO, e.g. when nothing ACKs them
+      for i in interfaces:
+        configure([i], self.bitrates[i])
+        self._can_tx_dirty.discard(i)
+      # the old sockets only return ENETDOWN after this
+      if self.can is not None:
+        self.can.close()
       self.can = CAN(self.interfaces)
-    for i in interfaces:
-      self.can.restart(self.interfaces.index(i), self.bitrates[i])
 
   def set_can_speed_kbps(self, bus: int, speed: int) -> None:
     with self._can_mu:
@@ -282,13 +281,17 @@ class UP:
         return
       i = self.interfaces[bus]
       if self.bitrates[i] != speed * 1000:
-        self.can.restart(bus, speed * 1000)
         self.bitrates[i] = speed * 1000
+        self._restart_can([i])
 
   def can_send(self, addr: int, dat: bytes, bus: int) -> None:
     with self._can_mu:
       try:
-        self._can().can_send(addr, dat, bus)
+        can = self._can()
+        # A send may queue TX even if it raises; only a reset proves it empty again.
+        if 0 <= bus < len(self.interfaces):
+          self._can_tx_dirty.add(self.interfaces[bus])
+        can.can_send(addr, dat, bus)
       except OSError as e:
         # this lane's TX buffer is full, i.e. nothing ACKs on it. drop the frame like a jungle does
         if e.errno != errno.ENOBUFS:
@@ -299,7 +302,6 @@ class UP:
       self.can_send(addr, dat, bus)
 
   def can_recv(self) -> list[tuple[int, bytes, int]]:
-    # _can() locks initialization; the transport synchronizes the receive itself.
     return self._can().can_recv()
 
   def can_replay(self, frames: list) -> None:
@@ -319,11 +321,11 @@ class UP:
   def can_clear(self, bus: int) -> None:
     if bus == 0xFFFF:
       self.can_recv()
-    else:
-      with self._can_mu:
-        can = self._can()
-        if 0 <= bus < len(self.interfaces):
-          can.can_clear(bus, self.bitrates[self.interfaces[bus]])
+      return
+    with self._can_mu:
+      self._can()
+      if 0 <= bus < len(self.interfaces) and self.interfaces[bus] in self._can_tx_dirty:
+        self._restart_can([self.interfaces[bus]])
 
   # *** OBD-C power ***
 
