@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import signal
 import sys
@@ -9,11 +10,14 @@ from ultimate_provisioning.dut import DUT
 def main() -> None:
   parser = argparse.ArgumentParser(prog="python -m ultimate_provisioning", description="control the DUT plugged into this UP")
   sub = parser.add_subparsers(dest="command", required=True)
-  sub.add_parser("status", help="print the DUT's state")
+  status = sub.add_parser("status", help="print the DUT's state")
+  status.add_argument("--json", action="store_true", help="its state, OBD-C power draw (W), serial, and ip as JSON, "
+                                                          "from sysfs only: cheap enough to poll, up once its USB gadget is")
   sub.add_parser("connect", help="make the DUT reachable: boot it if needed, set up its power, adb, ssh, USB network, and internet, "
                                  "and copy this package to it. Doesn't change how the DUT behaves otherwise")
   sub.add_parser("reset", help="put the station back in a clean state for CI: stop what drives the CAN, float the harness lines, "
-                               "connect, and prepare the DUT for tests. Reflashes the DUT if that fails")
+                               "connect, reflash the DUT if it isn't on openpilot master's AGNOS, and prepare it for tests. "
+                               "Reflashes the DUT if that fails")
   run = sub.add_parser("run", help="run a bash script on the DUT over ssh, from stdin or CMD, and exit with its status. "
                                    "it can use the UP with UP.remote() until then")
   run.add_argument("--cwd", help="directory to run it in")
@@ -43,7 +47,7 @@ def main() -> None:
 
   dut = DUT()
   if args.command == "status":
-    print(dut.state().value)
+    print(json.dumps(dut.status()) if args.json else dut.state().value)
   elif args.command == "connect":
     dut.connect()
   elif args.command == "reset":

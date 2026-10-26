@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 
 from ultimate_provisioning import can, flash
-from ultimate_provisioning.board import DUT_IP, HOST_IP, UP, in_qdl, lend
+from ultimate_provisioning.board import DUT_IP, HOST_IP, UP, gadget_serial, in_qdl, lend
 
 PACKAGE_PATH = "/data/ultimate_provisioning"  # where install_package puts this package on the DUT, for PYTHONPATH
 
@@ -78,11 +78,17 @@ class DUT:
 
   def reset(self) -> None:
     """Put the station back in a clean state for CI: stop what drives the CAN, float the harness lines, connect,
-    and prepare the DUT for tests. Reflashes the DUT and tries again if that fails."""
+    reflash the DUT if it isn't on openpilot master's AGNOS, and prepare it for tests. Reflashes the DUT and tries again
+    if that fails."""
     can.stop_holder()
     self.up.reset_obdc_gpio()
     try:
       self.connect()
+      have, want = self.shell("cat /VERSION").strip(), flash.master_version()
+      if want is not None and have != want:
+        print(f"DUT is on AGNOS {have}, openpilot master's is {want}, reflashing", flush=True)
+        self.flash()
+        self.connect()
       self.setup_testing()
     except Exception as e:
       print(f"reset failed, reflashing the DUT: {e}", flush=True)
@@ -130,6 +136,13 @@ class DUT:
     if self.up.read_obd_c_power() > 0.1:
       return DUTState.BOOTING
     return DUTState.OFF
+
+  def status(self) -> dict:
+    """The DUT's state, power draw on OBD-C (W), serial, and address, from sysfs only: cheap enough to poll. Its state
+    is up once its USB gadget is, which can be a little before adb."""
+    serial, watts = gadget_serial(), self.up.read_obd_c_power()
+    state = DUTState.QDL if in_qdl() else DUTState.UP if serial else DUTState.BOOTING if watts > 0.1 else DUTState.OFF
+    return {"state": state.value, "watts": watts, "serial": serial, "ip": DUT_IP}
 
   def wait_for_boot(self, timeout: float = 120) -> None:
     st = time.monotonic()
