@@ -3,6 +3,7 @@ import hashlib
 import json
 import lzma
 import os
+import re
 import shutil
 import subprocess
 import urllib.request
@@ -18,6 +19,7 @@ BUN_URL = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux
 QDL_JS_COMMIT = "d1e0683d3f66c6cb49b8ba07b03887b99c12dae6"
 PROGRAMMER_URL = "https://raw.githubusercontent.com/commaai/flash/7dddd54b0d8d493d57486596affaacabac740630/src/QDL/programmer.bin"
 PROGRAMMER_HASH = "5e9d300470a8046c26657277b47ce0fc5de8c1168719b98311aeda0c3ce2e013"
+LAUNCH_ENV_URL = "https://raw.githubusercontent.com/commaai/openpilot/master/launch_env.sh"
 
 
 def fetch(url: str, dst: Path, sha256: str | None = None) -> Path:
@@ -37,6 +39,17 @@ def fetch(url: str, dst: Path, sha256: str | None = None) -> Path:
     raise RuntimeError(f"{url}: hash mismatch, got {h.hexdigest()}")
   tmp.rename(dst)
   return dst
+
+
+def master_version() -> str | None:
+  """The AGNOS version openpilot master wants, or None if it can't be fetched."""
+  try:
+    with urllib.request.urlopen(LAUNCH_ENV_URL, timeout=30) as r:
+      m = re.search(r'AGNOS_VERSION="([^"]+)"', r.read().decode())
+  except OSError as e:
+    print(f"openpilot master's AGNOS version: {e}", flush=True)
+    return None
+  return m[1] if m else None
 
 
 def manifest() -> list[dict]:

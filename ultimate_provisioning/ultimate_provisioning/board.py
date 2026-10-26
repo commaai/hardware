@@ -124,6 +124,18 @@ def in_qdl() -> bool:
   return False
 
 
+def gadget_serial() -> str | None:
+  """The serial of a DUT on the UP's USB as its USB gadget, i.e. booted, without an adb round trip."""
+  for d in glob.glob("/sys/bus/usb/devices/*/product"):
+    d = Path(d).parent
+    try:
+      if (d / "product").read_text().strip() == "Linux USB Gadget":
+        return (d / "serial").read_text().strip()
+    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+      pass
+  return None
+
+
 class UP:
   """The ultimate provisioning board. Constructing it only pins the CAN IRQs (see pin_can_irqs), the rest waits for a method call.
 
