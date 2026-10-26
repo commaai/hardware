@@ -100,7 +100,18 @@ returned by `can_recv()`. Missing confirmations (including socket RX overflow)
 leave the lane pending; an uncertain send or newly opened interface remains
 unknown until a successful reset. Other lanes keep their sockets and pending TX
 when one lane is reset or changes bitrate. Sends, receives and resets are
-serialized, including `can_replay()`.
+serialized, including `can_replay()`. Blocking `CAN.can_recv(timeout)` waits outside
+the state lock, continues waiting after internal confirmations, and returns an
+empty batch when a restart or close cancels its wait. Interface names must be
+unique, including in explicit bus mappings.
+
+Receive calls read at most 256 datagrams per lane per batch; callers draining RX
+should receive until empty. TX clear also reads at most 256 datagrams per lane
+and buffers at most 256 public RX messages until the next receive. If that budget
+is exhausted before TX is confirmed, clear conservatively resets the lane.
+Already buffered public RX survives the reset; unread kernel RX can be discarded
+by a reset as before. This bounds work under sustained RX and prevents repeated
+clears from growing the public RX buffer indefinitely.
 
 This relies on the existing exclusive CAN ownership: other processes must honor
 the CAN lock, and must not send or reconfigure the interfaces behind the owner.

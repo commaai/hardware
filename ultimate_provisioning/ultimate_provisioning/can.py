@@ -29,6 +29,7 @@ CAN_RAW_FD_FRAMES = 5
 _HEADER = struct.Struct("=IBB2x")
 _CLASSIC_FRAME_SIZE = 16
 _FD_FRAME_SIZE = 72
+_RX_BATCH = 256
 
 
 def pin_can_irqs() -> None:
@@ -83,10 +84,13 @@ class CAN:
       self.interfaces = dict(enumerate(interfaces))
     if not self.interfaces:
       raise RuntimeError("no CAN interfaces found")
+    if len(set(self.interfaces.values())) != len(self.interfaces):
+      raise ValueError("CAN interfaces must be unique")
     if on_up():
       keep_off_can_cpu()
 
     self._mu = threading.RLock()
+    self._waiters: set[int] = set()
     # None means the interface may contain TX from before this socket existed.
     self._pending: dict[int, int | None] = dict.fromkeys(self.interfaces)
     self._echo: dict[int, bool] = {}
@@ -120,6 +124,12 @@ class CAN:
       raise
 
   def _close_socket(self, bus: int) -> None:
+    # Each blocking receiver owns a pipe; wake it before invalidating its snapshot.
+    for waiter in self._waiters:
+      try:
+        os.write(waiter, b"x")
+      except BlockingIOError:
+        pass
     sock = self._sockets.pop(bus)
     self._selector.unregister(sock)
     sock.close()
@@ -136,7 +146,6 @@ class CAN:
       self._pending[bus] = None
       if bus in self._sockets:
         self._close_socket(bus)
-      self._received[bus].clear()
       configure([self.interfaces[bus]], bitrate)
       self._open_socket(bus)
       self._pending[bus] = 0
@@ -145,7 +154,8 @@ class CAN:
     """Cancel TX. Requires exclusive interface ownership (UP holds the CAN Lock)."""
     with self._mu:
       if self._pending[bus] is not None and self._pending[bus] > 0:
-        self._received[bus].extend(self._read(bus))
+        # Bound both lock hold time and retained public RX across repeated clears.
+        self._received[bus].extend(self._read(bus, _RX_BATCH - len(self._received[bus])))
       if self._pending[bus] != 0:
         self.restart(bus, bitrate)
 
@@ -184,9 +194,9 @@ class CAN:
     for address, data, bus in messages:
       self.can_send(address, data, bus, fd=fd)
 
-  def _read(self, bus: int) -> list[tuple[int, bytes, int]]:
+  def _read(self, bus: int, limit: int = _RX_BATCH) -> list[tuple[int, bytes, int]]:
     messages = []
-    while True:
+    for _ in range(limit):
       try:
         raw, _, flags, _ = self._sockets[bus].recvmsg(_FD_FRAME_SIZE)
       except BlockingIOError:
@@ -209,18 +219,53 @@ class CAN:
     return messages
 
   def can_recv(self, timeout: float = 0.0) -> list[tuple[int, bytes, int]]:
-    """Wait up to ``timeout`` seconds, then drain all currently queued frames."""
-    with self._mu:
-      messages = []
-      for buffered in self._received.values():
-        messages.extend(buffered)
-        buffered.clear()
-      ready = self._selector.select(0 if messages else timeout)
-      while ready:
-        for key, _ in ready:
-          messages.extend(self._read(key.data))
-        ready = self._selector.select(0)
-      return messages
+    """Wait for public RX, returning a bounded batch. Restart/close cancels the wait."""
+    deadline = time.monotonic() + timeout
+    waiter = None
+    read_fd = write_fd = None
+    try:
+      while True:
+        with self._mu:
+          if read_fd is not None:
+            # Lifecycle changes cancel this call even if select returned socket
+            # readiness just before a restart. Never read the old snapshot.
+            try:
+              os.read(read_fd, 1)
+            except BlockingIOError:
+              pass
+            else:
+              return []
+          messages = []
+          for buffered in self._received.values():
+            messages.extend(buffered)
+            buffered.clear()
+          if not self._sockets:
+            return messages
+          for key, _ in self._selector.select(0):
+            messages.extend(self._read(key.data))
+          remaining = deadline - time.monotonic()
+          if messages or remaining <= 0:
+            return messages
+
+          if waiter is None:
+            # Register under the state lock, but never hold it while waiting.
+            # Each receiver owns its selector and wakeup pipe for this call.
+            read_fd, write_fd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+            waiter = selectors.DefaultSelector()
+            waiter.register(read_fd, selectors.EVENT_READ)
+            for sock in self._sockets.values():
+              waiter.register(sock, selectors.EVENT_READ)
+            self._waiters.add(write_fd)
+        if not waiter.select(remaining):
+          return []
+    finally:
+      with self._mu:
+        if waiter is not None:
+          waiter.close()
+        if write_fd is not None:
+          self._waiters.discard(write_fd)
+          os.close(write_fd)
+          os.close(read_fd)
 
   recv = can_recv
 
