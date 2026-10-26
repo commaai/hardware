@@ -14,6 +14,7 @@ import selectors
 import socket
 import struct
 import subprocess
+import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
 
@@ -85,29 +86,68 @@ class CAN:
     if on_up():
       keep_off_can_cpu()
 
+    self._mu = threading.RLock()
+    # None means the interface may contain TX from before this socket existed.
+    self._pending: dict[int, int | None] = dict.fromkeys(self.interfaces)
+    self._echo: dict[int, bool] = {}
+    self._received: dict[int, list[tuple[int, bytes, int]]] = {bus: [] for bus in self.interfaces}
     self._selector = selectors.DefaultSelector()
     self._sockets: dict[int, socket.socket] = {}
     try:
-      for bus, interface in self.interfaces.items():
-        sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        sock.setblocking(False)
-        sock.setsockopt(socket.SOL_CAN_RAW, CAN_RAW_FD_FRAMES, 1)
-        sock.bind((interface,))
-        self._sockets[bus] = sock
-        self._selector.register(sock, selectors.EVENT_READ, bus)
+      for bus in self.interfaces:
+        self._open_socket(bus)
     except Exception:
       self.close()
       raise
 
-  def close(self) -> None:
-    for sock in self._sockets.values():
+  def _open_socket(self, bus: int) -> None:
+    sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+    try:
+      sock.setblocking(False)
+      sock.setsockopt(socket.SOL_CAN_RAW, CAN_RAW_FD_FRAMES, 1)
+      sock.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_RECV_OWN_MSGS, 1)
+      sock.bind((self.interfaces[bus],))
+      # Without IFF_ECHO the CAN core echoes at enqueue time, not TX completion.
       try:
-        self._selector.unregister(sock)
-      except Exception:
-        pass
+        with open(f"/sys/class/net/{self.interfaces[bus]}/flags") as f:
+          self._echo[bus] = bool(int(f.read(), 16) & 0x40000)
+      except OSError:
+        self._echo[bus] = False
+      self._selector.register(sock, selectors.EVENT_READ, bus)
+      self._sockets[bus] = sock
+    except BaseException:
       sock.close()
-    self._sockets.clear()
-    self._selector.close()
+      raise
+
+  def _close_socket(self, bus: int) -> None:
+    sock = self._sockets.pop(bus)
+    self._selector.unregister(sock)
+    sock.close()
+
+  def close(self) -> None:
+    with self._mu:
+      for bus in list(self._sockets):
+        self._close_socket(bus)
+      self._selector.close()
+
+  def restart(self, bus: int, bitrate: int) -> None:
+    """Reset one lane, including controller and qdisc TX, under exclusive CAN ownership."""
+    with self._mu:
+      self._pending[bus] = None
+      if bus in self._sockets:
+        self._close_socket(bus)
+      self._received[bus].clear()
+      configure([self.interfaces[bus]], bitrate)
+      self._open_socket(bus)
+      self._pending[bus] = 0
+
+  def can_clear(self, bus: int, bitrate: int) -> None:
+    """Cancel TX. Requires exclusive interface ownership (UP holds the CAN Lock)."""
+    with self._mu:
+      if self._pending[bus] is not None and self._pending[bus] > 0:
+        self._received[bus].extend(self._read(bus))
+      if self._pending[bus] != 0:
+        self.restart(bus, bitrate)
 
   def __enter__(self) -> "CAN":
     return self
@@ -116,8 +156,6 @@ class CAN:
     self.close()
 
   def can_send(self, address: int, data: bytes, bus: int, *, fd: bool = False) -> None:
-    if bus not in self._sockets:
-      raise ValueError(f"unknown bus {bus}; available buses: {sorted(self._sockets)}")
     limit = 64 if fd else 8
     if not 0 <= address <= CAN_EFF_MASK:
       raise ValueError(f"CAN address out of range: {address:#x}")
@@ -128,7 +166,17 @@ class CAN:
     flags = CANFD_BRS | CANFD_FDF if fd else 0
     padded_size = 64 if fd else 8
     frame = _HEADER.pack(can_id, len(data), flags) + data.ljust(padded_size, b"\0")
-    self._sockets[bus].send(frame)
+    with self._mu:
+      if bus not in self._sockets:
+        raise ValueError(f"unknown bus {bus}; available buses: {sorted(self._sockets)}")
+      pending = self._pending[bus]
+      # An interrupted/failed/short send is uncertain. Only a full datagram
+      # return lets confirmations establish emptiness again without a reset.
+      self._pending[bus] = None
+      if self._sockets[bus].send(frame) != len(frame):
+        raise RuntimeError("incomplete SocketCAN send")
+      if pending is not None:
+        self._pending[bus] = pending + 1
 
   send = can_send
 
@@ -136,26 +184,43 @@ class CAN:
     for address, data, bus in messages:
       self.can_send(address, data, bus, fd=fd)
 
+  def _read(self, bus: int) -> list[tuple[int, bytes, int]]:
+    messages = []
+    while True:
+      try:
+        raw, _, flags, _ = self._sockets[bus].recvmsg(_FD_FRAME_SIZE)
+      except BlockingIOError:
+        break
+      if len(raw) not in (_CLASSIC_FRAME_SIZE, _FD_FRAME_SIZE) or flags & socket.MSG_TRUNC:
+        self._pending[bus] = None
+        raise RuntimeError(f"unexpected SocketCAN frame size {len(raw)} on bus {bus}")
+      if flags & socket.MSG_CONFIRM:
+        # Lost echoes (including RX overflow) leave an overestimate, never an
+        # underestimate. Ordinary RX and other sockets' echoes cannot retire TX.
+        if self._echo[bus] and self._pending[bus] is not None:
+          if self._pending[bus] > 0:
+            self._pending[bus] -= 1
+          else:
+            self._pending[bus] = None
+        continue
+      can_id, length, _ = _HEADER.unpack_from(raw)
+      mask = CAN_EFF_MASK if can_id & CAN_EFF_FLAG else CAN_SFF_MASK
+      messages.append((can_id & mask, raw[_HEADER.size:_HEADER.size + length], bus))
+    return messages
+
   def can_recv(self, timeout: float = 0.0) -> list[tuple[int, bytes, int]]:
     """Wait up to ``timeout`` seconds, then drain all currently queued frames."""
-    ready = self._selector.select(timeout)
-    messages: list[tuple[int, bytes, int]] = []
-    while ready:
-      for key, _ in ready:
-        sock = key.fileobj
-        bus = key.data
-        while True:
-          try:
-            raw = sock.recv(_FD_FRAME_SIZE)
-          except BlockingIOError:
-            break
-          if len(raw) not in (_CLASSIC_FRAME_SIZE, _FD_FRAME_SIZE):
-            raise RuntimeError(f"unexpected SocketCAN frame size {len(raw)} on bus {bus}")
-          can_id, length, _ = _HEADER.unpack_from(raw)
-          mask = CAN_EFF_MASK if can_id & CAN_EFF_FLAG else CAN_SFF_MASK
-          messages.append((can_id & mask, raw[_HEADER.size:_HEADER.size + length], bus))
-      ready = self._selector.select(0)
-    return messages
+    with self._mu:
+      messages = []
+      for buffered in self._received.values():
+        messages.extend(buffered)
+        buffered.clear()
+      ready = self._selector.select(0 if messages else timeout)
+      while ready:
+        for key, _ in ready:
+          messages.extend(self._read(key.data))
+        ready = self._selector.select(0)
+      return messages
 
   recv = can_recv
 
@@ -164,7 +229,7 @@ def configure(interfaces: Sequence[str], bitrate: int, *, fd: bool = False, dbit
   """Bring interfaces up. Run as root, or this uses passwordless sudo."""
   prefix = [] if os.geteuid() == 0 else ["sudo"]
   for interface in interfaces:
-    subprocess.run(prefix + ["ip", "link", "set", interface, "down"], check=False)
+    subprocess.run(prefix + ["ip", "link", "set", interface, "down"], check=True)
     command = prefix + ["ip", "link", "set", interface, "type", "can", "bitrate", str(bitrate)]
     if fd:
       command += ["dbitrate", str(dbitrate), "fd", "on"]

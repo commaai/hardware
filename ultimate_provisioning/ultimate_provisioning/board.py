@@ -14,7 +14,7 @@ from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from statistics import mean
 
-from ultimate_provisioning.can import CAN, Lock, available_interfaces, configure, on_up, pin_can_irqs
+from ultimate_provisioning.can import CAN, Lock, available_interfaces, on_up, pin_can_irqs
 
 VADC = "/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-00/c440000.qcom,spmi:qcom,pm8998@0:vadc@3100"
 INA_HWMON = "/sys/bus/i2c/devices/0-0040/hwmon/hwmon*"
@@ -156,6 +156,7 @@ class UP:
     self.ignition = False
     self.lock = None
     self.can = None
+    self._can_mu = threading.RLock()
     self._replay = None
     if on_up():
       pin_can_irqs()
@@ -173,13 +174,14 @@ class UP:
       self._replay[1].set()
       self._replay[0].join()
       self._replay = None
-    if self.can is not None:
-      self.can.close()
-      self.can = None
-      self.reset_obdc_gpio()
-    if self.lock is not None:
-      self.lock.close()
-      self.lock = None
+    with self._can_mu:
+      if self.can is not None:
+        self.can.close()
+        self.can = None
+        self.reset_obdc_gpio()
+      if self.lock is not None:
+        self.lock.close()
+        self.lock = None
 
   # *** aux USB port ***
 
@@ -252,46 +254,53 @@ class UP:
   # *** CAN ***
 
   def _can(self) -> CAN:
-    if self.can is None:
-      self.lock = self.lock or Lock()
-      self.interfaces = available_interfaces()
-      self.bitrates = dict.fromkeys(self.interfaces, 500_000)
-      self._restart_can(self.interfaces)
-    return self.can
+    with self._can_mu:
+      if self.can is None:
+        self.lock = self.lock or Lock()
+        self.interfaces = available_interfaces()
+        self.bitrates = dict.fromkeys(self.interfaces, 500_000)
+        try:
+          self._restart_can(self.interfaces)
+        except BaseException:
+          if self.can is not None:
+            self.can.close()
+            self.can = None
+          raise
+      return self.can
 
   def _restart_can(self, interfaces: list[str]) -> None:
-    # down and up drops the frames stuck in the TX FIFO, e.g. when nothing ACKs them
+    if self.can is None:
+      self.can = CAN(self.interfaces)
     for i in interfaces:
-      configure([i], self.bitrates[i])
-    # the old sockets only return ENETDOWN after this
-    if self.can is not None:
-      self.can.close()
-    self.can = CAN(self.interfaces)
+      self.can.restart(self.interfaces.index(i), self.bitrates[i])
 
   def set_can_speed_kbps(self, bus: int, speed: int) -> None:
-    self._can()
-    # like a jungle, ignore buses it doesn't have, e.g. 0xFFFF
-    if not 0 <= bus < len(self.interfaces):
-      return
-    i = self.interfaces[bus]
-    if self.bitrates[i] != speed * 1000:
-      self.bitrates[i] = speed * 1000
-      self._restart_can([i])
+    with self._can_mu:
+      self._can()
+      # like a jungle, ignore buses it doesn't have, e.g. 0xFFFF
+      if not 0 <= bus < len(self.interfaces):
+        return
+      i = self.interfaces[bus]
+      if self.bitrates[i] != speed * 1000:
+        self.can.restart(bus, speed * 1000)
+        self.bitrates[i] = speed * 1000
 
   def can_send(self, addr: int, dat: bytes, bus: int) -> None:
-    try:
-      self._can().can_send(addr, dat, bus)
-    except OSError as e:
-      # this lane's TX buffer is full, i.e. nothing ACKs on it. drop the frame like a jungle does
-      if e.errno != errno.ENOBUFS:
-        raise
+    with self._can_mu:
+      try:
+        self._can().can_send(addr, dat, bus)
+      except OSError as e:
+        # this lane's TX buffer is full, i.e. nothing ACKs on it. drop the frame like a jungle does
+        if e.errno != errno.ENOBUFS:
+          raise
 
   def can_send_many(self, msgs) -> None:
     for addr, dat, bus in msgs:
       self.can_send(addr, dat, bus)
 
   def can_recv(self) -> list[tuple[int, bytes, int]]:
-    return self._can().can_recv()
+    with self._can_mu:
+      return self._can().can_recv()
 
   def can_replay(self, frames: list) -> None:
     """Like a car: send frames[i], each a list for can_send_many(), every 10 ms in a loop, in the background until close()."""
@@ -308,11 +317,12 @@ class UP:
     self._replay[0].start()
 
   def can_clear(self, bus: int) -> None:
-    can = self._can()
-    if bus == 0xFFFF:
-      can.can_recv()
-    elif 0 <= bus < len(self.interfaces):
-      self._restart_can([self.interfaces[bus]])
+    with self._can_mu:
+      can = self._can()
+      if bus == 0xFFFF:
+        can.can_recv()
+      elif 0 <= bus < len(self.interfaces):
+        can.can_clear(bus, self.bitrates[self.interfaces[bus]])
 
   # *** OBD-C power ***
 
