@@ -91,6 +91,7 @@ class CAN:
 
     self._mu = threading.RLock()
     self._waiters: set[int] = set()
+    self._generation = 0
     # None means the interface may contain TX from before this socket existed.
     self._pending: dict[int, int | None] = dict.fromkeys(self.interfaces)
     self._echo: dict[int, bool] = {}
@@ -123,13 +124,17 @@ class CAN:
       sock.close()
       raise
 
-  def _close_socket(self, bus: int) -> None:
-    # Each blocking receiver owns a pipe; wake it before invalidating its snapshot.
+  def _notify_waiters(self) -> None:
     for waiter in self._waiters:
       try:
         os.write(waiter, b"x")
       except BlockingIOError:
         pass
+
+  def _close_socket(self, bus: int) -> None:
+    # A generation change distinguishes cancellation from buffered-RX notification.
+    self._generation += 1
+    self._notify_waiters()
     sock = self._sockets.pop(bus)
     self._selector.unregister(sock)
     sock.close()
@@ -155,7 +160,10 @@ class CAN:
     with self._mu:
       if self._pending[bus] is not None and self._pending[bus] > 0:
         # Bound both lock hold time and retained public RX across repeated clears.
-        self._received[bus].extend(self._read(bus, _RX_BATCH - len(self._received[bus])))
+        received = self._read(bus, _RX_BATCH - len(self._received[bus]))
+        self._received[bus].extend(received)
+        if received:
+          self._notify_waiters()
       if self._pending[bus] != 0:
         self.restart(bus, bitrate)
 
@@ -223,6 +231,7 @@ class CAN:
     deadline = time.monotonic() + timeout
     waiter = None
     read_fd = write_fd = None
+    generation = None
     messages = []
     try:
       while True:
@@ -231,10 +240,10 @@ class CAN:
             # Lifecycle changes cancel this call even if select returned socket
             # readiness just before a restart. Never read the old snapshot.
             try:
-              os.read(read_fd, 1)
+              os.read(read_fd, 4096)
             except BlockingIOError:
               pass
-            else:
+            if generation != self._generation:
               return messages
           for buffered in self._received.values():
             messages.extend(buffered)
@@ -262,8 +271,9 @@ class CAN:
             for sock in self._sockets.values():
               waiter.register(sock, selectors.EVENT_READ)
             self._waiters.add(write_fd)
-        if not waiter.select(remaining):
-          return []
+            generation = self._generation
+        # Even a timeout must recheck buffered RX under the state lock.
+        waiter.select(remaining)
     finally:
       with self._mu:
         if waiter is not None:

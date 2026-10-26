@@ -300,6 +300,9 @@ class TestReceiveWaiting(unittest.TestCase):
     self.ready = threading.Event()
     self.resume = threading.Event()
     self.pause_ready = False
+    self.pause_before = False
+    self.before_select = threading.Event()
+    self.enter_select = threading.Event()
     test = self
     selector_type = selectors.DefaultSelector
 
@@ -307,6 +310,10 @@ class TestReceiveWaiting(unittest.TestCase):
       def select(self, timeout=None):
         if timeout is None or timeout > 0:
           waiting.set()
+          if test.pause_before:
+            test.before_select.set()
+            if not test.enter_select.wait(2):
+              raise TimeoutError("test did not release select")
         result = super().select(timeout)
         if timeout and result and test.pause_ready:
           test.ready.set()
@@ -460,6 +467,40 @@ class TestReceiveWaiting(unittest.TestCase):
     self.assertEqual(self.errors, [])
     self.assertEqual(received, [(0x456, b'a', 0)] * (2 * _RX_BATCH))
     self.assertEqual(self.can.can_recv(), [])
+
+  def test_tx_clear_wakes_receiver_for_buffered_rx(self):
+    self.pause_before = True
+    self.addCleanup(self.enter_select.set)
+    self.can.can_send(0x123, b'a', 0)
+    _, thread = self.receive_in_thread(1)
+    self.assertTrue(self.before_select.wait(1))
+    self.packet()
+    self.packet(confirm=True)
+    self.can.can_clear(0, 500000)
+    self.configure.assert_not_called()
+    self.assertEqual(self.can._pending[0], 0)
+    self.enter_select.set()
+    thread.join(0.25)
+    self.assertFalse(thread.is_alive())
+    self.assertEqual(self.errors, [])
+    self.assertEqual(self.results, [[(0x456, b'a', 0)]])
+    self.assertEqual(self.can.can_recv(), [])
+
+  def test_receive_timeout_rechecks_buffered_rx(self):
+    self.pause_before = True
+    self.addCleanup(self.enter_select.set)
+    self.can.can_send(0x123, b'a', 0)
+    _, thread = self.receive_in_thread(0.05)
+    self.assertTrue(self.before_select.wait(1))
+    self.packet()
+    self.packet(confirm=True)
+    with patch.object(self.can, '_notify_waiters'):
+      self.can.can_clear(0, 500000)
+    self.enter_select.set()
+    thread.join(0.5)
+    self.assertFalse(thread.is_alive())
+    self.assertEqual(self.errors, [])
+    self.assertEqual(self.results, [[(0x456, b'a', 0)]])
 
   def test_cancellation_returns_consumed_rx(self):
     original_read = self.can._read
