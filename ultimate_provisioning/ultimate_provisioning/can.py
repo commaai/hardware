@@ -235,7 +235,7 @@ class CAN:
             except BlockingIOError:
               pass
             else:
-              return []
+              return messages
           for buffered in self._received.values():
             messages.extend(buffered)
             buffered.clear()
@@ -245,9 +245,11 @@ class CAN:
             messages.extend(self._read(key.data))
           # Internal batches release the state lock without changing the public
           # drain contract. Confirmations alone must not hide queued public RX.
+          remaining = deadline - time.monotonic()
+          if timeout > 0 and not messages and remaining <= 0:
+            return []
           if self._selector.select(0):
             continue
-          remaining = deadline - time.monotonic()
           if messages or remaining <= 0:
             return messages
 

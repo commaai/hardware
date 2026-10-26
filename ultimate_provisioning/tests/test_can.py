@@ -461,6 +461,64 @@ class TestReceiveWaiting(unittest.TestCase):
     self.assertEqual(received, [(0x456, b'a', 0)] * (2 * _RX_BATCH))
     self.assertEqual(self.can.can_recv(), [])
 
+  def test_cancellation_returns_consumed_rx(self):
+    original_read = self.can._read
+    restarted = False
+    def read(bus, *args):
+      nonlocal restarted
+      result = original_read(bus, *args)
+      if result and not restarted:
+        restarted = True
+        self.can.restart(0, 500000)
+        self.peers[-1].send(b'\x00' + _HEADER.pack(0x456, 3, 0) + b'new' + bytes(5))
+      return result
+    with patch.object(self.can, '_read', side_effect=read):
+      _, thread = self.receive_in_thread()
+      self.peers[-1].send(b'\x00' + _HEADER.pack(0x456, 3, 0) + b'old' + bytes(5))
+      thread.join(1)
+      self.assertFalse(thread.is_alive())
+    self.assertEqual(self.errors, [])
+    self.assertEqual(self.results, [[(0x456, b'old', 0)]])
+    self.assertEqual(self.can.can_recv(), [(0x456, b'new', 0)])
+
+  def test_continuous_confirmations_respect_timeout(self):
+    # The selector remains readable; _read consumes internal confirmations only.
+    self.packet(confirm=True)
+    with patch.object(self.can, '_read', return_value=[]):
+      start = time.monotonic()
+      self.assertEqual(self.can.can_recv(0.02), [])
+      elapsed = time.monotonic() - start
+    self.assertGreaterEqual(elapsed, 0.02)
+    self.assertLess(elapsed, 0.25)
+
+  def test_up_receive_does_not_hold_wrapper_lock(self):
+    up = UP.__new__(UP)
+    up._can_mu = threading.RLock()
+    up.can = self.can
+    up.interfaces = ['can0']
+    up.bitrates = {'can0': 500000}
+    for receive in (up.can_recv, lambda: up.can_clear(0xFFFF)):
+      with self.subTest(receive=receive):
+        entered, release, cleared = threading.Event(), threading.Event(), threading.Event()
+        def drain():
+          entered.set()
+          if not release.wait(1):
+            raise TimeoutError('test did not release receive')
+          return []
+        with patch.object(self.can, 'can_recv', side_effect=drain):
+          reader = threading.Thread(target=receive)
+          clearer = threading.Thread(target=lambda: (up.can_clear(0), cleared.set()))
+          reader.start()
+          try:
+            self.assertTrue(entered.wait(1))
+            clearer.start()
+            self.assertTrue(cleared.wait(0.25))
+          finally:
+            release.set()
+            reader.join(1)
+            if clearer.ident is not None:
+              clearer.join(1)
+
   def test_close_cancels_long_receive(self):
     _, thread = self.receive_in_thread()
     self.can.close()

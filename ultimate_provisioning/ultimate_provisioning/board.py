@@ -299,8 +299,8 @@ class UP:
       self.can_send(addr, dat, bus)
 
   def can_recv(self) -> list[tuple[int, bytes, int]]:
-    with self._can_mu:
-      return self._can().can_recv()
+    # _can() locks initialization; the transport synchronizes the receive itself.
+    return self._can().can_recv()
 
   def can_replay(self, frames: list) -> None:
     """Like a car: send frames[i], each a list for can_send_many(), every 10 ms in a loop, in the background until close()."""
@@ -317,12 +317,13 @@ class UP:
     self._replay[0].start()
 
   def can_clear(self, bus: int) -> None:
-    with self._can_mu:
-      can = self._can()
-      if bus == 0xFFFF:
-        can.can_recv()
-      elif 0 <= bus < len(self.interfaces):
-        can.can_clear(bus, self.bitrates[self.interfaces[bus]])
+    if bus == 0xFFFF:
+      self.can_recv()
+    else:
+      with self._can_mu:
+        can = self._can()
+        if 0 <= bus < len(self.interfaces):
+          can.can_clear(bus, self.bitrates[self.interfaces[bus]])
 
   # *** OBD-C power ***
 
