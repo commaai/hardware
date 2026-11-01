@@ -18,6 +18,7 @@ up.set_panda_power(True)             # DUT power over OBD-C, like a jungle
 # the harness and CAN for the DUT's panda, with the same API as a panda jungle. bus N is canN, see LANES
 up.set_harness_orientation(UP.HARNESS_ORIENTATION_1)
 up.set_ignition(True)
+up.reset_harness()                   # orientation 1, ignition off, like a parked car
 up.can_send(0x123, b"\x01\x02", 0)    # opens the CAN and takes its lock, until up.close()
 
 with CAN() as can:                   # SocketCAN, one bus per can* interface
@@ -51,7 +52,7 @@ Reaching the DUT, at a desk or in CI (`python -m ultimate_provisioning`, `up` be
   e.g. `rsync -e "ssh -F /data/ultimate_provisioning_ssh/config" ... dut:/data/`
 
 For CI:
-- `up reset` puts the station back in a clean state: stops whatever drives the CAN, floats the harness lines, connects,
+- `up reset` puts the station back in a clean state: stops whatever drives the CAN, resets the harness, connects,
   reflashes the DUT if it isn't on openpilot master's AGNOS, and prepares it for tests (ssh with the setup keys on every
   boot, openpilot and the power monitor stopped, leftovers from earlier tests removed). If that fails, it reflashes the
   DUT and tries once more

@@ -172,7 +172,7 @@ class UP:
     if on_up():
       pin_can_irqs()
       if stop_lte():
-        self.reset_obdc_gpio()  # it can stop mid-pulse
+        self.reset_harness()  # it can stop mid-pulse
 
   @staticmethod
   def remote() -> "Remote":
@@ -190,7 +190,7 @@ class UP:
     if self.can is not None:
       self.can.close()
       self.can = None
-      self.reset_obdc_gpio()
+      self.reset_harness()
     if self.lock is not None:
       self.lock.close()
       self.lock = None
@@ -261,6 +261,12 @@ class UP:
 
   def set_ignition(self, enabled: bool) -> None:
     self.ignition = enabled
+    self._apply_harness()
+
+  def reset_harness(self) -> None:
+    """Like a car parked with the harness in: orientation 1, ignition off. Floating, the SBU lines sit near the panda's
+    detection threshold, where any noise is a harness change, which clears its CAN queues."""
+    self.orientation, self.ignition = ORIENTATION_1, False
     self._apply_harness()
 
   # *** CAN ***
