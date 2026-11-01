@@ -41,7 +41,9 @@ kill "$watch" 2>/dev/null
 exit "$rc"
 """
 CLEANUP_TIMEOUT = STOP_TIMEOUT + 30
-POWER_OFF = 3.0  # long enough off for the DUT to reset
+QDL_STUCK = 10  # how long a booting DUT can be in QDL
+OBD_C_MIN_V = 10  # the OBD-C supply is ~15 V when on
+POWER_OFF = 3.0  # how long the DUT stays off after it is gone from USB: with 1 s, its next boot after a flash often lands in QDL
 CONNECT_LOCK = "/tmp/ultimate_provisioning_connect.lock"
 # the DUT doesn't take power from the UP's aux port, which powers it as the USB host, or give power to it
 SETUP_POWER = "echo 1 | sudo tee /sys/class/power_supply/battery/input_suspend && echo sink | sudo tee /sys/class/dual_role_usb/otg_default/power_role"
@@ -75,6 +77,11 @@ done
 """
 
 
+class NoPower(RuntimeError):
+  """The UP's OBD-C has no power with it on, so the DUT only gets the aux port's, and boots into QDL. The station's
+  supply or its wiring, nothing software fixes."""
+
+
 def in_qdl() -> bool:
   """Whether a DUT is on the UP's USB in QDL."""
   for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
@@ -83,7 +90,7 @@ def in_qdl() -> bool:
     try:
       if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
         return True
-    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+    except OSError:  # unplugged while we looked, e.g. the DUT rebooting
       pass
   return False
 
@@ -95,7 +102,7 @@ def gadget_serial() -> str | None:
     try:
       if (d / "product").read_text().strip() == "Linux USB Gadget":
         return (d / "serial").read_text().strip()
-    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+    except OSError:  # unplugged while we looked, e.g. the DUT rebooting
       pass
   return None
 
@@ -143,6 +150,8 @@ class DUT:
     can't tell or the first try fails. For the whole station, also UP.reset() first, see `up reset`."""
     try:
       self._reset()
+    except NoPower:
+      raise
     except Exception as e:
       print(f"reset failed, trying again: {e}", flush=True)
       self._reset(check=False)
@@ -226,9 +235,12 @@ class DUT:
     self.up.wait_for_power(-0.1, 0.1, 1, None)
 
   def wait_for_boot(self, timeout: float = 120) -> None:
-    st = time.monotonic()
+    st = qdl_at = time.monotonic()
     while not self.adb_online():
-      if in_qdl():
+      # still on USB in QDL for a moment after a flash resets it or its power is cut, stuck there if it stays
+      if not in_qdl():
+        qdl_at = time.monotonic()
+      elif time.monotonic() - qdl_at > QDL_STUCK:
         raise TimeoutError("DUT is in QDL")
       if time.monotonic() - st > timeout:
         raise TimeoutError(f"DUT didn't boot in {timeout}s, state={self.state().value}")
@@ -244,12 +256,28 @@ class DUT:
     self.up.set_obd_c_power(False)
     self.up.set_aux_power(False)
 
+  def _off(self, timeout: float = 15) -> None:
+    """Off until it has reset. A DUT in QDL stays on USB for seconds after its power is cut, and one powered again
+    before it's gone keeps its Sahara state, which once in error ("please reboot the device") fails every flash."""
+    self.off()
+    st = time.monotonic()
+    while (in_qdl() or gadget_serial()) and time.monotonic() - st < timeout:
+      time.sleep(0.1)
+    time.sleep(POWER_OFF)
+
+  def obd_c_on(self) -> None:
+    self.up.set_obd_c_power(True)
+    st = time.monotonic()
+    while (v := self.up.read_obd_c_voltage()) < OBD_C_MIN_V:
+      if time.monotonic() - st > 1:
+        raise NoPower(f"no power on OBD-C: {v:.1f} V with it on, check the station's supply")
+      time.sleep(0.05)
+
   def power_cycle(self) -> None:
     """Off, then on over OBD-C only. With the aux port powered too, it would boot into QDL."""
     print("power cycle...")
-    self.off()
-    time.sleep(POWER_OFF)
-    self.up.set_obd_c_power(True)
+    self._off()
+    self.obd_c_on()
 
   def boot(self, timeout: float = 120, tries: int = 3) -> None:
     """Power cycle it, with the UP as its USB host, and wait until it's up."""
@@ -270,8 +298,7 @@ class DUT:
     # a comma 3X occasionally boots normally instead, power cycling it again gets it there
     for i in range(tries):
       print("enter qdl...")
-      self.off()
-      time.sleep(POWER_OFF)
+      self._off()
       # powered from the aux port alone, with the UP as its host, the DUT boots into QDL. a comma 3X boots normally
       # if OBD-C comes on before it's there, so wait for it, then power OBD-C too
       self.up.set_aux_power(True)
@@ -279,7 +306,7 @@ class DUT:
       st = time.monotonic()
       while not in_qdl() and time.monotonic() - st < 10:
         time.sleep(0.1)
-      self.up.set_obd_c_power(True)
+      self.obd_c_on()
       st = time.monotonic()
       while not in_qdl() and time.monotonic() - st < timeout:
         time.sleep(0.5)
