@@ -136,8 +136,20 @@ def gadget_serial() -> str | None:
   return None
 
 
+def stop_lte() -> bool:
+  """Stop AGNOS's lte service, if it's running. Returns whether it was."""
+  # it's for a comma device's modem, whose reset and boot GPIOs are the UP's SBU2 relay and ignition. with no modem it
+  # never finishes, and pulls SBU2 low for 1s every 35s, which the DUT's panda sees as a harness or ignition change,
+  # clearing its CAN queues. it starts again on every boot
+  if subprocess.run(["systemctl", "is-active", "-q", "lte"]).returncode != 0:
+    return False
+  subprocess.run(["sudo", "systemctl", "stop", "lte"], check=True)
+  return True
+
+
 class UP:
-  """The ultimate provisioning board. Constructing it only pins the CAN IRQs (see pin_can_irqs), the rest waits for a method call.
+  """The ultimate provisioning board. Constructing it only pins the CAN IRQs (see pin_can_irqs) and stops the lte service
+  (see stop_lte), the rest waits for a method call.
 
   Its harness and CAN are for the panda in the DUT, with the same API as a panda jungle. Bus N is the UP's canN, see LANES.
   The CAN is opened on first use, which takes the CAN lock until close().
@@ -159,6 +171,8 @@ class UP:
     self._replay = None
     if on_up():
       pin_can_irqs()
+      if stop_lte():
+        self.reset_obdc_gpio()  # it can stop mid-pulse
 
   @staticmethod
   def remote() -> "Remote":
