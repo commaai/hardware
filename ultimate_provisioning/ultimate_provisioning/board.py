@@ -295,6 +295,8 @@ class UP:
   def set_obd_c_power(self, on: bool) -> None:
     self.obd_c_pwr.set(on)
 
+  set_panda_power = set_obd_c_power  # a jungle's name for it
+
   def read_obd_c_power(self) -> float:
     if self._ina_path is None:
       self._ina_path = glob.glob(f"{INA_HWMON}/power1_input")[0]
