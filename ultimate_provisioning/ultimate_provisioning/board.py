@@ -113,7 +113,8 @@ class UP:
   booting or flashing it, is up.dut, see DUT. Constructing it only pins the CAN IRQs (see pin_can_irqs) and stops the lte
   service (see stop_lte), the rest waits for a method call. The GPIOs are public, for tests of the panda's single pins.
 
-  Its harness and CAN are for the panda in the DUT, with the same API as a panda jungle. Bus N is the UP's canN, see LANES.
+  Its harness and CAN are for the panda in the DUT. The CAN has the same API as a panda's, so a test can use either
+  end alike. Bus N is the UP's canN, see LANES.
   The CAN is opened on first use, which takes the CAN lock until close().
   """
   HARNESS_ORIENTATION_NONE, HARNESS_ORIENTATION_1, HARNESS_ORIENTATION_2 = ORIENTATION_NONE, ORIENTATION_1, ORIENTATION_2
@@ -246,9 +247,6 @@ class UP:
 
   def set_can_speed_kbps(self, bus: int, speed: int) -> None:
     self._can()
-    # like a jungle, ignore buses it doesn't have, e.g. 0xFFFF
-    if not 0 <= bus < len(self.interfaces):
-      return
     i = self.interfaces[bus]
     if self.bitrates[i] != speed * 1000:
       self.bitrates[i] = speed * 1000
@@ -258,7 +256,7 @@ class UP:
     try:
       self._can().can_send(addr, dat, bus)
     except OSError as e:
-      # this lane's TX buffer is full, i.e. nothing ACKs on it. drop the frame like a jungle does
+      # this lane's TX buffer is full, i.e. nothing ACKs on it. drop the frame
       if e.errno != errno.ENOBUFS:
         raise
 
@@ -294,8 +292,6 @@ class UP:
 
   def set_obd_c_power(self, on: bool) -> None:
     self.obd_c_pwr.set(on)
-
-  set_panda_power = set_obd_c_power  # a jungle's name for it
 
   def read_obd_c_power(self) -> float:
     if self._ina_path is None:

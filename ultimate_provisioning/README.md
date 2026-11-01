@@ -12,7 +12,7 @@ up.get_power(seconds=1)              # DUT power draw on OBD-C (W)
 up.read_sbu1_voltage()
 up.sbu_1_relay.set_float()           # single pins, e.g. to test the panda's
 
-# the harness and CAN for the DUT's panda, with the same API as a panda jungle. bus N is canN, see LANES
+# the harness and CAN for the DUT's panda. the CAN has a panda's API. bus N is canN, see LANES
 up.set_harness_orientation(UP.HARNESS_ORIENTATION_1)  # HARNESS_ORIENTATION_NONE floats the SBU lines
 up.set_ignition(True)
 up.can_send(0x123, b"\x01\x02", 0)    # opens the CAN and takes its lock, until up.close()
@@ -47,8 +47,8 @@ Reaching the DUT, at a desk or in CI (`python -m ultimate_provisioning`, `up` be
   exits with the script's status. A timeout, ctrl-c, TERM or HUP stops the script on the DUT and waits for that.
   `up.dut.run(script, cwd=, env=, timeout=)` from Python. Both connect first if ssh to the DUT fails, e.g. after a reboot
 - `up ssh` is a shell on the DUT
-- while `up run` or `up ssh` runs, it lends the UP to the DUT: there, `UP.remote()` has the UP's methods, e.g. a panda test's
-  jungle, or `can_replay(frames)` to play a car's CAN. The UP opens on the first call and closes when they exit,
+- while `up run` or `up ssh` runs, it lends the UP to the DUT: there, `UP.remote()` has the UP's methods, e.g. for a panda
+  test, or `can_replay(frames)` to play a car's CAN. The UP opens on the first call and closes when they exit,
   which resets it, so a lost link or a killed test can't leave it in use or changed
 - every ssh to the DUT goes through `SSH_CONFIG` (`/data/ultimate_provisioning_ssh/config`, host `dut`),
   e.g. `rsync -e "ssh -F /data/ultimate_provisioning_ssh/config" ... dut:/data/`
