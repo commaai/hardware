@@ -9,6 +9,8 @@ from ultimate_provisioning.board import UP
 from ultimate_provisioning.console import Console
 
 def main() -> None:
+  # in order with stderr when piped, e.g. to the rack, which reports a failure by its last line
+  sys.stdout.reconfigure(line_buffering=True)
   parser = argparse.ArgumentParser(prog="python -m ultimate_provisioning", description="control the DUT plugged into this UP")
   sub = parser.add_subparsers(dest="command", required=True)
   status = sub.add_parser("status", help="print the DUT's state")
