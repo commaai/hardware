@@ -17,8 +17,8 @@ def main() -> None:
   sub.add_parser("connect", help="make the DUT reachable: boot it if needed, set up its power, adb, ssh, USB network, and internet, "
                                  "and copy this package to it. Doesn't change how the DUT behaves otherwise")
   sub.add_parser("reset", help="put the station back in a clean state for CI: stop what drives the CAN, reset the UP (UP.reset()), "
-                               "then the DUT (DUT.reset()): connect, reflash it if it isn't on openpilot master's AGNOS, and "
-                               "prepare it for tests. Reflashes the DUT if that fails")
+                               "then the DUT (DUT.reset()): flash what differs from openpilot master's AGNOS and a fresh /data, "
+                               "boot it and prepare it for tests. Reflashes all of AGNOS if that fails")
   run = sub.add_parser("run", help="run a bash script on the DUT over ssh, from stdin or CMD, and exit with its status. "
                                    "it can use the UP with UP.remote() until then")
   run.add_argument("--cwd", help="directory to run it in")
