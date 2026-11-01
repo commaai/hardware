@@ -9,8 +9,8 @@ import uuid
 from enum import Enum
 from pathlib import Path
 
-from ultimate_provisioning import can, flash
-from ultimate_provisioning.board import DUT_IP, HOST_IP, UP, gadget_serial, in_qdl, lend
+from ultimate_provisioning import flash
+from ultimate_provisioning.board import DUT_IP, HOST_IP, UP, lend
 
 PACKAGE_PATH = "/data/ultimate_provisioning"  # where install_package puts this package on the DUT, for PYTHONPATH
 
@@ -44,6 +44,31 @@ CONNECT_LOCK = "/tmp/ultimate_provisioning_connect.lock"
 SETUP_POWER = "echo 1 | sudo tee /sys/class/power_supply/battery/input_suspend && echo sink | sudo tee /sys/class/dual_role_usb/otg_default/power_role"
 
 
+def in_qdl() -> bool:
+  """Whether a DUT is on the UP's USB in QDL."""
+  for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
+    d = Path(d).parent
+    # comma's devices enumerate in QDL as 3801:9008
+    try:
+      if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
+        return True
+    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+      pass
+  return False
+
+
+def gadget_serial() -> str | None:
+  """The serial of a DUT on the UP's USB as its USB gadget, i.e. booted, without an adb round trip."""
+  for d in glob.glob("/sys/bus/usb/devices/*/product"):
+    d = Path(d).parent
+    try:
+      if (d / "product").read_text().strip() == "Linux USB Gadget":
+        return (d / "serial").read_text().strip()
+    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+      pass
+  return None
+
+
 class DUTState(Enum):
   OFF = "off"
   QDL = "qdl"
@@ -52,7 +77,8 @@ class DUTState(Enum):
 
 
 class DUT:
-  """The device under test, plugged into the UP's OBD-C and aux ports."""
+  """The device under test, plugged into the UP's OBD-C and aux ports, usually as up.dut. Everything here acts on the DUT,
+  through the UP, including powering it."""
 
   def __init__(self, up: UP | None = None):
     self.up = up or UP()
@@ -64,7 +90,7 @@ class DUT:
       self._connect()
 
   def _connect(self) -> None:
-    if self.state() != DUTState.UP:
+    if not self.adb_online():
       self.boot()
     self.wait_for_boot()  # adb comes up before the rest, e.g. sshd
     self.setup_power()
@@ -77,11 +103,8 @@ class DUT:
       raise ConnectionError(f"ssh to the DUT at {DUT_IP} fails")
 
   def reset(self) -> None:
-    """Put the station back in a clean state for CI: stop what drives the CAN, reset the harness, connect,
-    reflash the DUT if it isn't on openpilot master's AGNOS, and prepare it for tests. Reflashes the DUT and tries again
-    if that fails."""
-    can.stop_holder()
-    self.up.reset_harness()
+    """Put the DUT back in a clean state for CI: connect, reflash it if it isn't on openpilot master's AGNOS, and prepare
+    it for tests. Reflashes it and tries again if that fails. For the whole station, also UP.reset() first, see `up reset`."""
     try:
       self.connect()
       have, want = self.shell("cat /VERSION").strip(), flash.master_version()
@@ -128,21 +151,22 @@ class DUT:
     except subprocess.TimeoutExpired:
       return False
 
-  def state(self) -> DUTState:
-    if in_qdl():
-      return DUTState.QDL
-    if self.adb_online():
-      return DUTState.UP
-    if self.up.read_obd_c_power() > 0.1:
-      return DUTState.BOOTING
-    return DUTState.OFF
-
   def status(self) -> dict:
     """The DUT's state, power draw on OBD-C (W), serial, and address, from sysfs only: cheap enough to poll. Its state
     is up once its USB gadget is, which can be a little before adb."""
     serial, watts = gadget_serial(), self.up.read_obd_c_power()
     state = DUTState.QDL if in_qdl() else DUTState.UP if serial else DUTState.BOOTING if watts > 0.1 else DUTState.OFF
     return {"state": state.value, "watts": watts, "serial": serial, "ip": DUT_IP}
+
+  def state(self) -> DUTState:
+    return DUTState(self.status()["state"])
+
+  def is_connected(self) -> bool:
+    """Whether a DUT is plugged into both of the UP's ports."""
+    return self.up.read_aux_port_state() != "USB device is powered off" and self.up.read_obd_c_power() > 0.1
+
+  def wait_for_disconnect(self) -> None:
+    self.up.wait_for_power(-0.1, 0.1, 1, None)
 
   def wait_for_boot(self, timeout: float = 120) -> None:
     st = time.monotonic()
@@ -160,13 +184,22 @@ class DUT:
   # *** power ***
 
   def off(self) -> None:
-    self.up.set_power(obd_c=False, aux=False)
+    self.up.set_obd_c_power(False)
+    self.up.set_aux_power(False)
+
+  def power_cycle(self) -> None:
+    """Off, then on over OBD-C only. With the aux port powered too, it would boot into QDL."""
+    print("power cycle...")
+    self.off()
+    time.sleep(3.0)
+    self.up.set_obd_c_power(True)
 
   def boot(self, timeout: float = 120, tries: int = 3) -> None:
+    """Power cycle it, with the UP as its USB host, and wait until it's up."""
     # the DUT occasionally lands in QDL or doesn't come up, e.g. when coming from QDL or with the aux port in ufp mode
     for i in range(tries):
-      self.up.reboot()
-      self.up.set_aux_dfp()
+      self.power_cycle()
+      self.up.set_aux_host()
       try:
         self.wait_for_boot(timeout)
         return
@@ -176,9 +209,20 @@ class DUT:
         print(f"boot failed, retrying: {e}")
 
   def enter_qdl(self, timeout: float = 15, tries: int = 3) -> None:
+    """Power cycle it into QDL."""
     # a comma 3X occasionally boots normally instead, power cycling it again gets it there
     for i in range(tries):
-      self.up.enter_qdl()
+      print("enter qdl...")
+      self.off()
+      time.sleep(3.0)
+      # powered from the aux port alone, with the UP as its host, the DUT boots into QDL. a comma 3X boots normally
+      # if OBD-C comes on before it's there, so wait for it, then power OBD-C too
+      self.up.set_aux_power(True)
+      self.up.set_aux_host()
+      st = time.monotonic()
+      while not in_qdl() and time.monotonic() - st < 10:
+        time.sleep(0.1)
+      self.up.set_obd_c_power(True)
       st = time.monotonic()
       while not in_qdl() and time.monotonic() - st < timeout:
         time.sleep(0.5)

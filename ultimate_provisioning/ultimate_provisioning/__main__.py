@@ -4,8 +4,9 @@ import os
 import signal
 import sys
 
+from ultimate_provisioning import can
+from ultimate_provisioning.board import UP
 from ultimate_provisioning.console import Console
-from ultimate_provisioning.dut import DUT
 
 def main() -> None:
   parser = argparse.ArgumentParser(prog="python -m ultimate_provisioning", description="control the DUT plugged into this UP")
@@ -15,9 +16,9 @@ def main() -> None:
                                                           "from sysfs only: cheap enough to poll, up once its USB gadget is")
   sub.add_parser("connect", help="make the DUT reachable: boot it if needed, set up its power, adb, ssh, USB network, and internet, "
                                  "and copy this package to it. Doesn't change how the DUT behaves otherwise")
-  sub.add_parser("reset", help="put the station back in a clean state for CI: stop what drives the CAN, reset the harness, "
-                               "connect, reflash the DUT if it isn't on openpilot master's AGNOS, and prepare it for tests. "
-                               "Reflashes the DUT if that fails")
+  sub.add_parser("reset", help="put the station back in a clean state for CI: stop what drives the CAN, reset the UP (UP.reset()), "
+                               "then the DUT (DUT.reset()): connect, reflash it if it isn't on openpilot master's AGNOS, and "
+                               "prepare it for tests. Reflashes the DUT if that fails")
   run = sub.add_parser("run", help="run a bash script on the DUT over ssh, from stdin or CMD, and exit with its status. "
                                    "it can use the UP with UP.remote() until then")
   run.add_argument("--cwd", help="directory to run it in")
@@ -45,12 +46,15 @@ def main() -> None:
         pass
     return
 
-  dut = DUT()
+  up = UP()
+  dut = up.dut
   if args.command == "status":
     print(json.dumps(dut.status()) if args.json else dut.state().value)
   elif args.command == "connect":
     dut.connect()
   elif args.command == "reset":
+    can.stop_holder()
+    up.reset()
     dut.reset()
   elif args.command == "run":
     cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd

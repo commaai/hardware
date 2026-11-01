@@ -2,24 +2,26 @@
 
 The ultimate provisioning (UP) board is the ultimate comma four debugger, used in both the factory and developers' desks.
 The device under test (DUT) plugs into the UP's OBD-C and aux USB ports.
+`UP` is the board itself: its pins, power rails, and buses. `up.dut` is the DUT, and everything on it acts on the DUT.
 
 ```python
 from ultimate_provisioning import UP, CAN, Console
 
 up = UP()
-up.enter_qdl()                       # power cycle the DUT into QDL
-up.reboot()                          # power cycle the DUT normally
 up.get_power(seconds=1)              # DUT power draw on OBD-C (W)
-up.orientation_sbu1(ignition_on=True)
 up.read_sbu1_voltage()
-up.reset_obdc_gpio()                 # float all the SBU lines
-up.set_panda_power(True)             # DUT power over OBD-C, like a jungle
+up.sbu_1_relay.set_float()           # single pins, e.g. to test the panda's
 
 # the harness and CAN for the DUT's panda, with the same API as a panda jungle. bus N is canN, see LANES
-up.set_harness_orientation(UP.HARNESS_ORIENTATION_1)
+up.set_harness_orientation(UP.HARNESS_ORIENTATION_1)  # HARNESS_ORIENTATION_NONE floats the SBU lines
 up.set_ignition(True)
-up.reset_harness()                   # orientation 1, ignition off, like a parked car
 up.can_send(0x123, b"\x01\x02", 0)    # opens the CAN and takes its lock, until up.close()
+up.reset()                           # no can_replay(), the CAN empty, harness in orientation 1, ignition off. not power
+
+up.dut.boot()                        # power cycle the DUT and wait until it's up
+up.dut.enter_qdl()                   # power cycle the DUT into QDL
+up.dut.off()
+up.dut.shell("uname -a")             # over adb
 
 with CAN() as can:                   # SocketCAN, one bus per can* interface
   can.can_send(0x123, b"\x01\x02", bus=0)
@@ -43,16 +45,16 @@ Reaching the DUT, at a desk or in CI (`python -m ultimate_provisioning`, `up` be
   after its login profile, in `--cwd` or the home directory. The script doesn't get stdin, and CMD is a shell script
   like with ssh. `--env` passes a variable from the environment, like `docker -e`. It streams the output and
   exits with the script's status. A timeout, ctrl-c, TERM or HUP stops the script on the DUT and waits for that.
-  `DUT().run(script, cwd=, env=, timeout=)` from Python. Both connect first if ssh to the DUT fails, e.g. after a reboot
+  `up.dut.run(script, cwd=, env=, timeout=)` from Python. Both connect first if ssh to the DUT fails, e.g. after a reboot
 - `up ssh` is a shell on the DUT
 - while `up run` or `up ssh` runs, it lends the UP to the DUT: there, `UP.remote()` has the UP's methods, e.g. a panda test's
   jungle, or `can_replay(frames)` to play a car's CAN. The UP opens on the first call and closes when they exit,
-  so a lost link or a killed test can't leave it in use
+  which resets it, so a lost link or a killed test can't leave it in use or changed
 - every ssh to the DUT goes through `SSH_CONFIG` (`/data/ultimate_provisioning_ssh/config`, host `dut`),
   e.g. `rsync -e "ssh -F /data/ultimate_provisioning_ssh/config" ... dut:/data/`
 
 For CI:
-- `up reset` puts the station back in a clean state: stops whatever drives the CAN, resets the harness, connects,
+- `up reset` puts the station back in a clean state: stops whatever drives the CAN, resets the UP, connects,
   reflashes the DUT if it isn't on openpilot master's AGNOS, and prepares it for tests (ssh with the setup keys on every
   boot, openpilot and the power monitor stopped, leftovers from earlier tests removed). If that fails, it reflashes the
   DUT and tries once more
