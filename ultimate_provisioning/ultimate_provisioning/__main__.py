@@ -15,7 +15,7 @@ def main() -> None:
                                                           "from sysfs only: cheap enough to poll, up once its USB gadget is")
   sub.add_parser("connect", help="make the DUT reachable: boot it if needed, set up its power, adb, ssh, USB network, and internet, "
                                  "and copy this package to it. Doesn't change how the DUT behaves otherwise")
-  sub.add_parser("reset", help="put the station back in a clean state for CI: stop what drives the CAN, float the harness lines, "
+  sub.add_parser("reset", help="put the station back in a clean state for CI: stop what drives the CAN, reset the harness, "
                                "connect, reflash the DUT if it isn't on openpilot master's AGNOS, and prepare it for tests. "
                                "Reflashes the DUT if that fails")
   run = sub.add_parser("run", help="run a bash script on the DUT over ssh, from stdin or CMD, and exit with its status. "

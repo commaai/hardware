@@ -77,11 +77,11 @@ class DUT:
       raise ConnectionError(f"ssh to the DUT at {DUT_IP} fails")
 
   def reset(self) -> None:
-    """Put the station back in a clean state for CI: stop what drives the CAN, float the harness lines, connect,
+    """Put the station back in a clean state for CI: stop what drives the CAN, reset the harness, connect,
     reflash the DUT if it isn't on openpilot master's AGNOS, and prepare it for tests. Reflashes the DUT and tries again
     if that fails."""
     can.stop_holder()
-    self.up.reset_obdc_gpio()
+    self.up.reset_harness()
     try:
       self.connect()
       have, want = self.shell("cat /VERSION").strip(), flash.master_version()
