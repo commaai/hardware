@@ -55,13 +55,13 @@ Reaching the DUT, at a desk or in CI (`python -m ultimate_provisioning`, `up` be
 
 For CI:
 - `up reset` makes the DUT as good as new, like a fresh VM, in about 35s: stops whatever drives the CAN, resets the
-  UP, then in one QDL session flashes the partitions of either slot that differ from openpilot master's AGNOS and a
+  UP, then in one QDL session flashes the partitions of slot a that differ from openpilot master's AGNOS and a
   fresh `/data` (a small ext4 image, grown on first boot, with just what lets the UP in), boots slot a and prepares it
   for tests (ssh with the setup keys on every boot, openpilot and the power monitor stopped). If that fails, it
   reflashes all of AGNOS and tries once more
 - `up status --json` is the DUT's state, OBD-C power draw, serial, and address, from sysfs only, cheap enough to poll
 - `up flash` reflashes the DUT's OS over QDL, from openpilot master's AGNOS manifest
-  to both slots, and boots slot a. It keeps userdata (`/data`), persist, and the other non-A/B partitions.
+  to slot a, and boots it. It keeps userdata (`/data`), persist, and the other non-A/B partitions.
   On first use it installs bun and a pinned [qdl.js](https://github.com/commaai/qdl.js) into `/data/ultimate_provisioning_flash`,
   where it also caches the images
 

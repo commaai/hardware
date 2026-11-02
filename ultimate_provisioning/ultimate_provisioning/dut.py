@@ -145,9 +145,9 @@ class DUT:
       time.sleep(0.2)
 
   def reset(self) -> None:
-    """Make the DUT as good as new for CI, like a fresh VM: openpilot master's AGNOS on both slots, booting a, a fresh
-    /data, then prepare it for tests. Only the partitions that differ from master's are flashed, all of them if the DUT
-    can't tell or the first try fails. For the whole station, also UP.reset() first, see `up reset`."""
+    """Make the DUT as good as new for CI, like a fresh VM: openpilot master's AGNOS on slot a, which it boots, a fresh
+    /data, then prepare it for tests. Only the partitions of slot a that differ from master's are flashed, all of them if
+    the DUT can't tell or the first try fails. For the whole station, also UP.reset() first, see `up reset`."""
     try:
       self._reset()
     except NoPower:
@@ -158,7 +158,7 @@ class DUT:
 
   def _reset(self, check: bool = True) -> None:
     cmd, parts = flash.prepare()
-    stale, size, keys = {f"{n}_{s}" for n in parts for s in "ab"}, None, None
+    stale, size, keys = {f"{n}_a" for n in parts}, None, None
     if check and self.adb_online():
       out = self.shell(flash.check_script(parts), timeout=60)
       stale = {line.split()[1] for line in out.splitlines() if line.startswith("stale ")}
@@ -317,10 +317,10 @@ class DUT:
 
   def flash(self, images: dict[str, Path] | None = None, timeout: float = 300) -> None:
     """Flash images, partition name to image (e.g. "system_a", "userdata") over QDL in one session, and boot slot a.
-    By default all of AGNOS from openpilot master to both slots, keeping /data, see flash.py."""
+    By default all of AGNOS from openpilot master to slot a, keeping /data, see flash.py."""
     cmd, parts = flash.prepare()
     if images is None:
-      images = {f"{n}_{slot}": p["path"] for n, p in parts.items() for slot in "ab"}
+      images = {f"{n}_a": p["path"] for n, p in parts.items()}
     self.enter_qdl()
     subprocess.run(cmd + [f"{n}={p}" for n, p in images.items()], timeout=1800, check=True)
     self.wait_for_boot(timeout)  # the first boot of a freshly flashed slot is slow

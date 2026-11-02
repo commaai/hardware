@@ -123,23 +123,20 @@ def image_bytes(path: Path, start: int, end: int) -> bytes:
 
 
 def check_script(parts: dict[str, dict]) -> str:
-  """What runs on the booted DUT to tell which partitions of either slot differ from openpilot master's, and the facts
-  a fresh /data needs. Prints "stale <partition>" (e.g. "stale boot_b") for each, then "userdata <size>" and
+  """What runs on the booted DUT to tell which partitions of slot a, the one reset boots, differ from openpilot master's,
+  and the facts a fresh /data needs. Prints "stale <partition>" (e.g. "stale boot_a") for each, then "userdata <size>" and
   "keys <base64 of the setup keys>"."""
-  # both slots: when a boot of slot a fails the bootloader falls back to b, which must be master's too
   # an image's own hash, of as many bytes of the partition: the manifest's ondevice_hash doesn't match a correct flash
   # of every partition. system's superblock is enough, a read-only mount leaves it alone and any rw one changes it
   # (a write through the block device wouldn't, a deep check is for that). dsp isn't checked: its read-only mount
   # replays a journal its image ships with, so it differs after every boot, and flashing it takes half a second
-  small = "\n".join(f"{n}_{s} {p['size']} {p['hash_raw']}" for n, p in parts.items() if n not in ("system", "dsp") for s in "ab")
+  small = "\n".join(f"{n}_a {p['size']} {p['hash_raw']}" for n, p in parts.items() if n not in ("system", "dsp"))
   sb = hashlib.sha256(image_bytes(parts["system"]["path"], 1024, 2048)).hexdigest()
   return f"""one() {{ [ "$(sudo head -c $2 /dev/disk/by-partlabel/$1 | sha256sum | cut -c1-64)" = "$3" ] || echo "stale $1"; }}
 export -f one
 printf '{small}\n' | xargs -P8 -L1 bash -c 'one "$@"' one
-for s in a b; do
-  [ "$(sudo dd if=/dev/disk/by-partlabel/system_$s bs=1024 skip=1 count=1 2>/dev/null | sha256sum | cut -c1-64)" = {sb} ] || echo "stale system_$s"
-  echo "stale dsp_$s"
-done
+[ "$(sudo dd if=/dev/disk/by-partlabel/system_a bs=1024 skip=1 count=1 2>/dev/null | sha256sum | cut -c1-64)" = {sb} ] || echo "stale system_a"
+echo "stale dsp_a"
 echo "userdata $(sudo blockdev --getsize64 /dev/disk/by-partlabel/userdata)"
 echo "keys $(base64 -w0 /usr/comma/setup_keys)"
 """
