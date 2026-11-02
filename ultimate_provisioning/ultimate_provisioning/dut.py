@@ -232,7 +232,7 @@ class DUT:
     raise TimeoutError(f"DUT didn't enter QDL in {tries} tries")
 
   def flash(self, timeout: float = 300) -> None:
-    """Reflash AGNOS from openpilot master to both slots over QDL, and boot slot a. Keeps /data, see flash.py."""
+    """Reflash AGNOS from openpilot master to slot a over QDL and boot it. Keeps /data, see flash.py."""
     cmd = flash.prepare()
     self.enter_qdl()
     subprocess.run(cmd, timeout=1800, check=True)

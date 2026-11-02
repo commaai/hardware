@@ -16,9 +16,9 @@ CACHE = Path("/data/ultimate_provisioning_flash")  # on the UP: bun, qdl.js, and
 # over the air, it's the same for every comma 3X and comma four
 MANIFEST_URL = "https://raw.githubusercontent.com/commaai/openpilot/master/openpilot/common/hardware/comma/{}"
 BUN_URL = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-aarch64.zip"
-QDL_JS_COMMIT = "d1e0683d3f66c6cb49b8ba07b03887b99c12dae6"
-PROGRAMMER_URL = "https://raw.githubusercontent.com/commaai/flash/7dddd54b0d8d493d57486596affaacabac740630/src/QDL/programmer.bin"
-PROGRAMMER_HASH = "5e9d300470a8046c26657277b47ce0fc5de8c1168719b98311aeda0c3ce2e013"
+QDL_JS_COMMIT = "7096451e305e2f6468764c9a44a0889f7dff6a03"
+PROGRAMMER_URL = "https://raw.githubusercontent.com/commaai/flash/915ae008808f936cf16411a3f6ab33999e98a5c2/src/QDL/programmer.bin"
+PROGRAMMER_HASH = "3ed2b613b7f2b1523085ffb9c674c9c0ca2a4e95d1bade647264d4a8aa2e9e1e"
 LAUNCH_ENV_URL = "https://raw.githubusercontent.com/commaai/openpilot/master/launch_env.sh"
 
 
@@ -89,7 +89,7 @@ def setup() -> tuple[Path, Path]:
 def prepare() -> list[str]:
   """Fetch everything for flashing into CACHE, and drop the cached images openpilot master no longer has.
 
-  Returns the command that flashes the images to both slots of the DUT in QDL in one session, makes slot a active, and resets it.
+  Returns the command that flashes the images to slot a of the DUT in QDL in one session, makes slot a active, and resets it.
   """
   bun, qdl = setup()
   programmer = fetch(PROGRAMMER_URL, CACHE / f"programmer-{PROGRAMMER_HASH}.bin", PROGRAMMER_HASH)
