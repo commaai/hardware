@@ -17,8 +17,8 @@ CACHE = Path("/data/ultimate_provisioning_flash")  # on the UP: bun, qdl.js, and
 MANIFEST_URL = "https://raw.githubusercontent.com/commaai/openpilot/master/openpilot/common/hardware/comma/{}"
 BUN_URL = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-aarch64.zip"
 QDL_JS_COMMIT = "7096451e305e2f6468764c9a44a0889f7dff6a03"
-PROGRAMMER_URL = "https://raw.githubusercontent.com/commaai/flash/915ae008808f936cf16411a3f6ab33999e98a5c2/src/QDL/programmer.bin"
-PROGRAMMER_HASH = "3ed2b613b7f2b1523085ffb9c674c9c0ca2a4e95d1bade647264d4a8aa2e9e1e"
+PROGRAMMER_URL = "https://raw.githubusercontent.com/commaai/flash/7d844834b3004d3452706110900123ff064fc2ed/src/QDL/programmer.bin"
+PROGRAMMER_HASH = "7878d5758ff9c37a90ed937a1908e2d50003171f137dc2d79203e02fd7357dec"
 LAUNCH_ENV_URL = "https://raw.githubusercontent.com/commaai/openpilot/master/launch_env.sh"
 
 
