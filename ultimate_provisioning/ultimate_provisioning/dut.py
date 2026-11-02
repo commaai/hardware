@@ -177,6 +177,7 @@ class DUT:
     self.flash(images)
     self.connect()
     self.setup_testing()
+    self.finish_data()
 
   def fresh_data(self, keys: bytes) -> dict[str, str | bytes]:
     """What a fresh /data has, else AGNOS makes what it needs on its first boot: what lets the UP in (adb, ssh with the
@@ -358,6 +359,12 @@ sudo resolvectl dns $i 1.1.1.1 8.8.8.8
     openpilot), and set the clock."""
     self.shell(f"printf %s {shlex.quote(CONTINUE)} > /data/continue.sh && chmod +x /data/continue.sh\n{SETUP}"
                f"sudo date -u -s {shlex.quote(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()))} >/dev/null", timeout=60)
+
+  def finish_data(self, timeout: float = 120) -> None:
+    """Wait for the kernel to zero a fresh /data's inode tables, at full speed: it does in the background after the
+    first boot, and throttled that writes ~20 MB/s for over a minute, which tests (e.g. of power draw) would see."""
+    self.shell(f"sudo mount -o remount,init_itable=0 /data; s=$SECONDS; while pgrep -x ext4lazyinit >/dev/null && "
+               f"[ $((SECONDS - s)) -lt {int(timeout)} ]; do sleep 0.2; done", timeout=timeout + 30)
 
   def setup_ssh_config(self) -> None:
     """Make the UP's key for the DUT and the ssh config, once."""

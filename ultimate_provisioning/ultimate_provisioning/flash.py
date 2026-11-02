@@ -17,6 +17,9 @@ SPARSE_MAGIC, RAW, FILL, SKIP = 0xED26FF3A, 0xCAC1, 0xCAC2, 0xCAC3  # Android sp
 BLOCK = 4096
 # what reset() last learned from the DUT, for a fresh /data when the DUT can't say: its setup keys and userdata size
 KEYS, USERDATA_SIZE = CACHE / "setup_keys", CACHE / "userdata_size"
+# a quarter of the inodes AGNOS makes, still far more than CI uses: the kernel zeroes their tables after the first boot,
+# ~0.4 GB instead of ~1.7 GB, see DUT.finish_data()
+MKFS = ["-b", str(BLOCK), "-i", "65536", "-E", "lazy_itable_init=1,nodiscard,root_owner=1000:1000"]
 
 # agnos.json is what openpilot's updater flashes. all-partitions.json adds the firmware that never changes
 # over the air, it's the same for every comma 3X and comma four
@@ -178,7 +181,7 @@ def sparse(raw: Path, out: Path) -> None:
 def userdata(size: int, files: dict[str, str | bytes]) -> Path:
   """A sparse image of a fresh /data for a userdata partition of size bytes: an empty ext4 owned by comma with only files
   in it, path to content (a str is a symlink's target, scripts end in .sh). Cached in CACHE, a few MB."""
-  key = hashlib.sha256(repr((size, sorted(files.items()))).encode()).hexdigest()[:16]
+  key = hashlib.sha256(repr((size, sorted(files.items()), MKFS)).encode()).hexdigest()[:16]
   out = CACHE / f"userdata-{key}.img"
   if out.exists():
     return out
@@ -199,8 +202,7 @@ def userdata(size: int, files: dict[str, str | bytes]) -> Path:
     os.truncate(os.open(raw, os.O_CREAT | os.O_WRONLY, 0o644), size)
     # what the UP's user (comma, 1000, like on the DUT) writes keeps its owner. nothing is zeroed: ext4 never reads blocks
     # it hasn't initialized, so the flash can leave them as they are
-    subprocess.run(["mkfs.ext4", "-q", "-F", "-b", str(BLOCK), "-E", "lazy_itable_init=1,nodiscard,root_owner=1000:1000",
-                    "-d", str(seed), str(raw)], check=True)
+    subprocess.run(["mkfs.ext4", "-q", "-F", *MKFS, "-d", str(seed), str(raw)], check=True)
     sparse(raw, out.with_suffix(".tmp"))
     out.with_suffix(".tmp").rename(out)
   return out
