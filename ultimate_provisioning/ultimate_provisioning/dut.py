@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import uuid
+import errno
 from enum import Enum
 from pathlib import Path
 
@@ -52,8 +53,8 @@ def in_qdl() -> bool:
     try:
       if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
         return True
-    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
-      pass
+    except OSError as e:  # unplugged while we looked, e.g. the DUT rebooting
+      if e.errno not in (errno.ENODEV, errno.ENOENT): raise
   return False
 
 
@@ -64,8 +65,8 @@ def gadget_serial() -> str | None:
     try:
       if (d / "product").read_text().strip() == "Linux USB Gadget":
         return (d / "serial").read_text().strip()
-    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
-      pass
+    except OSError as e:  # unplugged while we looked, e.g. the DUT rebooting
+      if e.errno not in (errno.ENODEV, errno.ENOENT): raise
   return None
 
 
