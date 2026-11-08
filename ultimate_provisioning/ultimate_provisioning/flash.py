@@ -184,7 +184,7 @@ def userdata(size: int, files: dict[str, str | bytes]) -> Path:
   key = hashlib.sha256(repr((size, sorted(files.items()), MKFS)).encode()).hexdigest()[:16]
   out = CACHE / f"userdata-{key}.img"
   if out.exists():
-    return out
+    return fresh_journal(out)
   for old in CACHE.glob("userdata-*.img"):
     old.unlink()
   with tempfile.TemporaryDirectory(dir=CACHE) as tmp:
@@ -205,4 +205,36 @@ def userdata(size: int, files: dict[str, str | bytes]) -> Path:
     subprocess.run(["mkfs.ext4", "-q", "-F", *MKFS, "-d", str(seed), str(raw)], check=True)
     sparse(raw, out.with_suffix(".tmp"))
     out.with_suffix(".tmp").rename(out)
+  return fresh_journal(out)
+
+
+def fresh_journal(img: Path) -> Path:
+  """A copy of a userdata image whose journal starts at a random sequence. The flash leaves the journal's blocks as they
+  were, and every /data's journal would start at the same sequence, so after an unclean shutdown jbd2 would replay
+  transactions an earlier /data left there onto this one."""
+  out = CACHE / "userdata.img"
+  shutil.copyfile(img, out)
+  with open(out, "r+b") as f:
+    # the journal's first block, from the ext4 superblock's copy of the journal inode's first extent
+    f.seek(28 + 12 + 1024 + 0x10C + 18)
+    hi, lo = struct.unpack("<HI", f.read(6))
+    journal, pos, at = hi << 32 | lo, 28, 0
+    while True:
+      f.seek(pos)
+      kind, _, n, total = struct.unpack("<HHII", f.read(12))
+      if at + n > journal:
+        break
+      pos, at = pos + total, at + n
+    f.seek(pos + 12 + (journal - at) * BLOCK)
+    sb = bytearray(f.read(1024))
+    assert kind == RAW and sb[:4] == b"\xc0\x3b\x39\x98", "no journal superblock in the userdata image"
+    sb[24:28], sb[0xFC:0x100] = os.urandom(4), bytes(4)
+    crc = 0xFFFFFFFF  # crc32c, without the final xor like jbd2
+    for b in sb:
+      crc ^= b
+      for _ in range(8):
+        crc = crc >> 1 ^ 0x82F63B78 * (crc & 1)
+    sb[0xFC:0x100] = struct.pack(">I", crc)
+    f.seek(-1024, os.SEEK_CUR)
+    f.write(sb)
   return out
