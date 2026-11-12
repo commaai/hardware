@@ -233,13 +233,14 @@ class UP:
       self.lock = self.lock or Lock()
       self.interfaces = available_interfaces()
       self.bitrates = dict.fromkeys(self.interfaces, 500_000)
+      self.dbitrates = dict.fromkeys(self.interfaces, 0)  # 0 is classic CAN
       self._restart_can(self.interfaces)
     return self.can
 
   def _restart_can(self, interfaces: list[str]) -> None:
     # down and up drops the frames stuck in the TX FIFO, e.g. when nothing ACKs them
     for i in interfaces:
-      configure([i], self.bitrates[i])
+      configure([i], self.bitrates[i], fd=self.dbitrates[i] > 0, dbitrate=self.dbitrates[i] or 2_000_000)
     # the old sockets only return ENETDOWN after this
     if self.can is not None:
       self.can.close()
@@ -252,9 +253,17 @@ class UP:
       self.bitrates[i] = speed * 1000
       self._restart_can([i])
 
+  def set_can_data_speed_kbps(self, bus: int, speed: int) -> None:
+    """CAN FD on this bus, with the data bitrate like the panda's set_can_data_speed_kbps()"""
+    self._can()
+    i = self.interfaces[bus]
+    if self.dbitrates[i] != speed * 1000:
+      self.dbitrates[i] = speed * 1000
+      self._restart_can([i])
+
   def can_send(self, addr: int, dat: bytes, bus: int) -> None:
     try:
-      self._can().can_send(addr, dat, bus)
+      self._can().can_send(addr, dat, bus, fd=len(dat) > 8)
     except OSError as e:
       # this lane's TX buffer is full, i.e. nothing ACKs on it. drop the frame
       if e.errno != errno.ENOBUFS:

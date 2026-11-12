@@ -167,13 +167,23 @@ def configure(interfaces: Sequence[str], bitrate: int, *, fd: bool = False, dbit
     subprocess.run(prefix + ["ip", "link", "set", interface, "down"], check=False)
     command = prefix + ["ip", "link", "set", interface, "type", "can", "bitrate", str(bitrate)]
     if fd:
-      command += ["dbitrate", str(dbitrate), "fd", "on"]
+      # the panda's sample points
+      command += ["sample-point", "0.8", "dbitrate", str(dbitrate), "dsample-point", "0.8", "fd", "on"]
+    else:
+      command += ["fd", "off"]
     command += ["restart-ms", "100"]
     subprocess.run(command, check=True)
-    subprocess.run(prefix + ["ip", "link", "set", interface, "txqueuelen", "100"], check=True)
-    # batch the CAN IRQs where the driver supports it
-    subprocess.run(prefix + ["ethtool", "-C", interface, "rx-usecs-irq", "4000", "rx-frames-irq", "16", "tx-usecs-irq", "4000", "tx-frames-irq", "4"],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    # a longer queue for CAN FD bursts
+    subprocess.run(prefix + ["ip", "link", "set", interface, "txqueuelen", "1000" if fd else "100"], check=True)
+    # message RAM split and IRQ batching, where the driver supports them
+    rx, tx, coalesce = (15, 12, ["3000", "6", "3000", "4"]) if fd else (24, 4, ["4000", "16", "4000", "4"])
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "check": False}
+    subprocess.run(prefix + ["ethtool", "-G", interface, "rx", str(rx), "tx", str(tx)], **quiet)
+    # the RAM split applies when the link opens
+    subprocess.run(prefix + ["ip", "link", "set", interface, "up"], check=True)
+    subprocess.run(prefix + ["ip", "link", "set", interface, "down"], check=True)
+    subprocess.run(prefix + ["ethtool", "-C", interface, "rx-usecs-irq", coalesce[0], "rx-frames-irq", coalesce[1], "tx-usecs-irq", coalesce[2],
+                             "tx-frames-irq", coalesce[3]], **quiet)
     subprocess.run(prefix + ["ip", "link", "set", interface, "up"], check=True)
   if on_up():
     pin_can_irqs()
