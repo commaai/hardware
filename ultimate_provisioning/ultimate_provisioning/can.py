@@ -167,19 +167,19 @@ def configure(interfaces: Sequence[str], bitrate: int, *, fd: bool = False, dbit
     subprocess.run(prefix + ["ip", "link", "set", interface, "down"], check=False)
     command = prefix + ["ip", "link", "set", interface, "type", "can", "bitrate", str(bitrate)]
     if fd:
-      # the panda samples at 80%, and CAN FD switches to the data bitrate at the sample point
+      # the panda's sample points
       command += ["sample-point", "0.8", "dbitrate", str(dbitrate), "dsample-point", "0.8", "fd", "on"]
     else:
       command += ["fd", "off"]
     command += ["restart-ms", "100"]
     subprocess.run(command, check=True)
-    # a burst of CAN FD frames waits in a longer queue instead of being dropped
+    # a longer queue for CAN FD bursts
     subprocess.run(prefix + ["ip", "link", "set", interface, "txqueuelen", "1000" if fd else "100"], check=True)
-    # split the message RAM and batch the IRQs where the driver supports it
+    # message RAM split and IRQ batching, where the driver supports them
     rx, tx, coalesce = (15, 12, ["3000", "6", "3000", "4"]) if fd else (24, 4, ["4000", "16", "4000", "4"])
     quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "check": False}
     subprocess.run(prefix + ["ethtool", "-G", interface, "rx", str(rx), "tx", str(tx)], **quiet)
-    # the RAM split applies when the link opens, the IRQ batching is checked against it
+    # the RAM split applies when the link opens
     subprocess.run(prefix + ["ip", "link", "set", interface, "up"], check=True)
     subprocess.run(prefix + ["ip", "link", "set", interface, "down"], check=True)
     subprocess.run(prefix + ["ethtool", "-C", interface, "rx-usecs-irq", coalesce[0], "rx-frames-irq", coalesce[1], "tx-usecs-irq", coalesce[2],
