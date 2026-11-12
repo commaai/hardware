@@ -269,6 +269,8 @@ class UP:
 
   def can_replay(self, frames: list) -> None:
     """Like a car: send frames[i], each a list for can_send_many(), every 10 ms in a loop, in the background until close()."""
+    # opening the CAN takes ~0.5 s, do it before the loop starts its 10 ms clock
+    self._can()
     stop = threading.Event()
     def loop():
       t = time.monotonic()
