@@ -1,3 +1,4 @@
+import base64
 import fcntl
 import glob
 import os
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
 
@@ -39,9 +41,45 @@ kill "$watch" 2>/dev/null
 exit "$rc"
 """
 CLEANUP_TIMEOUT = STOP_TIMEOUT + 30
+QDL_STUCK = 10  # how long a booting DUT can be in QDL
+OBD_C_MIN_V = 10  # the OBD-C supply is ~15 V when on
+POWER_OFF = 3.0  # how long the DUT stays off after it is gone from USB: with 1 s, its next boot after a flash often lands in QDL
 CONNECT_LOCK = "/tmp/ultimate_provisioning_connect.lock"
 # the DUT doesn't take power from the UP's aux port, which powers it as the USB host, or give power to it
 SETUP_POWER = "echo 1 | sudo tee /sys/class/power_supply/battery/input_suspend && echo sink | sudo tee /sys/class/dual_role_usb/otg_default/power_role"
+
+
+# every boot, in place of openpilot: ssh with the setup keys, not the GithubSshKeys param tests clear, from a bind mount
+# so the read-only system partition stays as flashed and a reset can tell it apart from one a test changed, and no power
+# monitor or other software that competes with hardware tests
+SETUP = f"""set -e
+sudo abctl --set_success
+if grep -q /data/params/d/GithubSshKeys /etc/ssh/sshd_config; then
+  sed 's,/data/params/d/GithubSshKeys,/usr/comma/setup_keys,' /etc/ssh/sshd_config | sudo tee /run/up_sshd_config >/dev/null
+  sudo mount --bind /run/up_sshd_config /etc/ssh/sshd_config
+  sudo systemctl mask --runtime --now ssh-param-watcher.path ssh-param-watcher.service
+  sudo systemctl restart ssh
+fi
+sudo systemctl stop power_monitor
+{SETUP_POWER}
+# hold the internal panda out of reset
+[ -d /sys/class/gpio/gpio49 ] || echo 49 | sudo tee /sys/class/gpio/export
+echo out | sudo tee /sys/class/gpio/gpio49/direction
+echo 1 | sudo tee /sys/class/gpio/gpio49/value
+systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
+"""
+CONTINUE = f"""#!/usr/bin/env bash
+{SETUP}
+while true; do
+  if ! sudo systemctl is-active -q ssh; then sudo systemctl start ssh; fi
+  sleep 5
+done
+"""
+
+
+class NoPower(RuntimeError):
+  """The UP's OBD-C has no power with it on, so the DUT only gets the aux port's, and boots into QDL. The station's
+  supply or its wiring, nothing software fixes."""
 
 
 def in_qdl() -> bool:
@@ -52,7 +90,7 @@ def in_qdl() -> bool:
     try:
       if (d / "idVendor").read_text().strip() in ("05c6", "3801") and (d / "idProduct").read_text().strip() == "9008":
         return True
-    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+    except OSError:  # unplugged while we looked, e.g. the DUT rebooting
       pass
   return False
 
@@ -64,7 +102,7 @@ def gadget_serial() -> str | None:
     try:
       if (d / "product").read_text().strip() == "Linux USB Gadget":
         return (d / "serial").read_text().strip()
-    except FileNotFoundError:  # unplugged while we looked, e.g. the DUT rebooting
+    except OSError:  # unplugged while we looked, e.g. the DUT rebooting
       pass
   return None
 
@@ -93,31 +131,60 @@ class DUT:
     if not self.adb_online():
       self.boot()
     self.wait_for_boot()  # adb comes up before the rest, e.g. sshd
-    self.setup_power()
-    self.setup_adb()
-    self.setup_ssh()
-    self.install_package()
-    self.setup_network()
-    self.share_internet()
-    if self.ssh_run("true").returncode != 0:
-      raise ConnectionError(f"ssh to the DUT at {DUT_IP} fails")
+    self.setup_ssh_config()
+    # the DUT's side as one adb round trip, while the UP sets up its side and pushes this package
+    with ThreadPoolExecutor(2) as pool:
+      jobs = [pool.submit(self.setup_host_network), pool.submit(self.install_package)]
+      self.shell(self.connect_script())
+      for j in jobs:
+        j.result()
+    deadline = time.monotonic() + 30
+    while self.ssh_run("true", quiet=True).returncode != 0:  # sshd may still be starting
+      if time.monotonic() > deadline:
+        raise ConnectionError(f"ssh to the DUT at {DUT_IP} fails")
+      time.sleep(0.2)
 
   def reset(self) -> None:
-    """Put the DUT back in a clean state for CI: connect, reflash it if it isn't on openpilot master's AGNOS, and prepare
-    it for tests. Reflashes it and tries again if that fails. For the whole station, also UP.reset() first, see `up reset`."""
+    """Make the DUT as good as new for CI, like a fresh VM: openpilot master's AGNOS on slot a, which it boots, a fresh
+    /data, then prepare it for tests. Only the partitions of slot a that differ from master's are flashed, all of them if
+    the DUT can't tell or the first try fails. For the whole station, also UP.reset() first, see `up reset`."""
     try:
-      self.connect()
-      have, want = self.shell("cat /VERSION").strip(), flash.master_version()
-      if want is not None and have != want:
-        print(f"DUT is on AGNOS {have}, openpilot master's is {want}, reflashing", flush=True)
-        self.flash()
-        self.connect()
-      self.setup_testing()
+      self._reset()
+    except NoPower:
+      raise
     except Exception as e:
-      print(f"reset failed, reflashing the DUT: {e}", flush=True)
-      self.flash()
-      self.connect()
-      self.setup_testing()
+      print(f"reset failed, trying again: {e}", flush=True)
+      self._reset(check=False)
+
+  def _reset(self, check: bool = True) -> None:
+    cmd, parts = flash.prepare()
+    stale, size, keys = {f"{n}_a" for n in parts}, None, None
+    if check and self.adb_online():
+      out = self.shell(flash.check_script(parts), timeout=60)
+      stale = {line.split()[1] for line in out.splitlines() if line.startswith("stale ")}
+      size = int(out.split("userdata ")[1].split()[0])
+      keys = base64.b64decode(out.split("keys ")[1].split()[0])
+    if keys is not None:
+      flash.KEYS.write_bytes(keys)  # for a DUT that can't say, it's the same on every DUT
+    keys = keys or (flash.KEYS.read_bytes() if flash.KEYS.exists() else None)
+    size = size or (int(flash.USERDATA_SIZE.read_text()) if flash.USERDATA_SIZE.exists() else None)
+    if size:
+      flash.USERDATA_SIZE.write_text(str(size))
+    images = {n: parts[n.rsplit("_", 1)[0]]["path"] for n in sorted(stale)}
+    if size and keys:  # else keep /data this once
+      images["userdata"] = flash.userdata(size, self.fresh_data(keys))
+    print(f"flashing {', '.join(images)}", flush=True)
+    self.flash(images)
+    self.connect()
+    self.setup_testing()
+    self.finish_data()
+
+  def fresh_data(self, keys: bytes) -> dict[str, str | bytes]:
+    """What a fresh /data has, else AGNOS makes what it needs on its first boot: what lets the UP in (adb, ssh with the
+    setup keys) and what takes openpilot's place on boot, see setup_testing()."""
+    return {"continue.sh": CONTINUE.encode(), "params/d": "/data/params/d_tmp", "params/d_tmp/AdbEnabled": b"1",
+            # comma.sh turns adb off at boot when continue.sh exists and the ssh keys are still the setup keys
+            "params/d_tmp/GithubSshKeys": keys.rstrip(b"\n") + b"\n# ultimate_provisioning: keep adb enabled\n"}
 
   # *** adb ***
 
@@ -169,9 +236,12 @@ class DUT:
     self.up.wait_for_power(-0.1, 0.1, 1, None)
 
   def wait_for_boot(self, timeout: float = 120) -> None:
-    st = time.monotonic()
+    st = qdl_at = time.monotonic()
     while not self.adb_online():
-      if in_qdl():
+      # still on USB in QDL for a moment after a flash resets it or its power is cut, stuck there if it stays
+      if not in_qdl():
+        qdl_at = time.monotonic()
+      elif time.monotonic() - qdl_at > QDL_STUCK:
         raise TimeoutError("DUT is in QDL")
       if time.monotonic() - st > timeout:
         raise TimeoutError(f"DUT didn't boot in {timeout}s, state={self.state().value}")
@@ -187,12 +257,28 @@ class DUT:
     self.up.set_obd_c_power(False)
     self.up.set_aux_power(False)
 
+  def _off(self, timeout: float = 15) -> None:
+    """Off until it has reset. A DUT in QDL stays on USB for seconds after its power is cut, and one powered again
+    before it's gone keeps its Sahara state, which once in error ("please reboot the device") fails every flash."""
+    self.off()
+    st = time.monotonic()
+    while (in_qdl() or gadget_serial()) and time.monotonic() - st < timeout:
+      time.sleep(0.1)
+    time.sleep(POWER_OFF)
+
+  def obd_c_on(self) -> None:
+    self.up.set_obd_c_power(True)
+    st = time.monotonic()
+    while (v := self.up.read_obd_c_voltage()) < OBD_C_MIN_V:
+      if time.monotonic() - st > 1:
+        raise NoPower(f"no power on OBD-C: {v:.1f} V with it on, check the station's supply")
+      time.sleep(0.05)
+
   def power_cycle(self) -> None:
     """Off, then on over OBD-C only. With the aux port powered too, it would boot into QDL."""
     print("power cycle...")
-    self.off()
-    time.sleep(3.0)
-    self.up.set_obd_c_power(True)
+    self._off()
+    self.obd_c_on()
 
   def boot(self, timeout: float = 120, tries: int = 3) -> None:
     """Power cycle it, with the UP as its USB host, and wait until it's up."""
@@ -213,8 +299,7 @@ class DUT:
     # a comma 3X occasionally boots normally instead, power cycling it again gets it there
     for i in range(tries):
       print("enter qdl...")
-      self.off()
-      time.sleep(3.0)
+      self._off()
       # powered from the aux port alone, with the UP as its host, the DUT boots into QDL. a comma 3X boots normally
       # if OBD-C comes on before it's there, so wait for it, then power OBD-C too
       self.up.set_aux_power(True)
@@ -222,7 +307,7 @@ class DUT:
       st = time.monotonic()
       while not in_qdl() and time.monotonic() - st < 10:
         time.sleep(0.1)
-      self.up.set_obd_c_power(True)
+      self.obd_c_on()
       st = time.monotonic()
       while not in_qdl() and time.monotonic() - st < timeout:
         time.sleep(0.5)
@@ -231,71 +316,58 @@ class DUT:
       print(f"DUT didn't enter QDL in {timeout}s" + (", retrying" if i < tries - 1 else ""))
     raise TimeoutError(f"DUT didn't enter QDL in {tries} tries")
 
-  def flash(self, timeout: float = 300) -> None:
-    """Reflash AGNOS from openpilot master to both slots over QDL, and boot slot a. Keeps /data, see flash.py."""
-    cmd = flash.prepare()
+  def flash(self, images: dict[str, Path] | None = None, timeout: float = 300) -> None:
+    """Flash images, partition name to image (e.g. "system_a", "userdata") over QDL in one session, and boot slot a.
+    By default all of AGNOS from openpilot master to slot a, keeping /data, see flash.py."""
+    cmd, parts = flash.prepare()
+    if images is None:
+      images = {f"{n}_a": p["path"] for n, p in parts.items()}
     self.enter_qdl()
-    subprocess.run(cmd, timeout=1800, check=True)
+    subprocess.run(cmd + [f"{n}={p}" for n, p in images.items()], timeout=1800, check=True)
     self.wait_for_boot(timeout)  # the first boot of a freshly flashed slot is slow
 
-  def setup_power(self) -> None:
-    """Stop the DUT from charging from or backfeeding into the UP's aux port, so it's powered from OBD-C only, like in
-    a car. Doesn't persist across DUT reboots, setup_testing() also does it at every boot."""
-    self.shell(SETUP_POWER)
-
-  def setup_adb(self) -> None:
-    """Keep adb (and the USB network) enabled across DUT reboots.
-
-    On boot, AGNOS's comma.sh deletes AdbEnabled once /data/continue.sh exists if GithubSshKeys are still
-    the setup keys, which leaves the DUT unreachable from the UP. Mark the keys as changed to opt out of that.
-    Synced, since the DUT is often power cycled right after.
-    """
+  def connect_script(self) -> str:
+    """The DUT's side of connect(): its power from OBD-C only, adb kept on across reboots, the UP's ssh key authorized
+    and sshd started, and the USB network and internet through the UP."""
     adb, keys = "/data/params/d/AdbEnabled", "/data/params/d/GithubSshKeys"
-    # rewriting AdbEnabled restarts the USB gadget, so only write it if needed
-    self.shell(f"mkdir -p /data/params/d && if [ \"$(cat {adb} 2>/dev/null)\" != 1 ]; then echo -n 1 > {adb}; fi && "
-               f"if cmp -s {keys} /usr/comma/setup_keys; then echo '# ultimate_provisioning: keep adb enabled' >> {keys}; fi && sync")
+    key = shlex.quote(SSH_KEY.with_suffix(".pub").read_text().strip())
+    return f"""set -e
+{SETUP_POWER} >/dev/null
+# comma.sh turns adb off at boot once /data/continue.sh exists if the ssh keys are still the setup keys: mark them changed.
+# rewriting AdbEnabled restarts the USB gadget, so only if needed. synced, the DUT is often power cycled right after
+mkdir -p /data/params/d
+[ "$(cat {adb} 2>/dev/null)" = 1 ] || echo -n 1 > {adb}
+cmp -s {keys} /usr/comma/setup_keys && echo '# ultimate_provisioning: keep adb enabled' >> {keys}
+sync
+# next to the DUT's usual keys, gone after a reboot. sshd for this boot, without turning on the SshEnabled setting
+grep -qxF {key} {AUTHORIZED_KEYS} 2>/dev/null || echo {key} >> {AUTHORIZED_KEYS}
+chmod 644 {AUTHORIZED_KEYS}
+systemctl is-active -q ssh || sudo systemctl start --no-block ssh
+# the first login starts comma's user manager, over a second: now, while the rest goes on
+sudo systemctl start --no-block user@1000.service
+# usually usb0, but the modem's cdc_ether can take that name. left alone if it's up, so open connections survive
+i=$(cat /config/usb_gadget/g1/functions/ncm.0/ifname)
+ip -4 -o addr show dev $i | grep -qF ' {DUT_IP}/30 ' || {{ sudo ip -4 addr flush dev $i && sudo ip addr add {DUT_IP}/30 dev $i; }}
+sudo ip link set $i up
+# the DUT's own connections (e.g. wifi) still take priority
+sudo ip route replace default via {HOST_IP} dev $i metric 1000
+sudo resolvectl dns $i 1.1.1.1 8.8.8.8
+"""
 
   def setup_testing(self) -> None:
     """Keep ssh available and stop software which competes with hardware tests, now and after reboot (in place of
-    openpilot), and clear what earlier tests left behind."""
-    setup = """#!/usr/bin/env bash
-set -e
-sudo abctl --set_success
-if grep -q /data/params/d/GithubSshKeys /etc/ssh/sshd_config || systemctl is-enabled -q ssh-param-watcher.path; then
-  sudo mount -o rw,remount /
-  trap 'sudo mount -o ro,remount /' EXIT
-  sudo sed -i 's,/data/params/d/GithubSshKeys,/usr/comma/setup_keys,' /etc/ssh/sshd_config
-  sudo systemctl disable ssh-param-watcher.path ssh-param-watcher.service
-  sudo systemctl daemon-reload
-  sudo systemctl restart ssh
-  sudo mount -o ro,remount /
-  trap - EXIT
-fi
-sudo systemctl stop power_monitor
-""" + SETUP_POWER + """
-# hold the internal panda out of reset
-[ -d /sys/class/gpio/gpio49 ] || echo 49 | sudo tee /sys/class/gpio/export
-echo out | sudo tee /sys/class/gpio/gpio49/direction
-echo 1 | sudo tee /sys/class/gpio/gpio49/value
-"""
-    keepalive = """while true; do
-  if ! sudo systemctl is-active -q ssh; then sudo systemctl start ssh; fi
-  sleep 5
-done
-"""
-    clean = """for l in /tmp/up_run.*.lock; do if [ -e "$l" ]; then fuser -s -k -KILL "$l" || true; rm -f "$l"; fi; done  # run()s that didn't stop
-if pgrep -f launch_chffrplus.sh > /dev/null; then sudo systemctl stop comma; fi
-rm -rf /tmp/tmp* ~comma/.commacache /dev/shm/* /dev/tmp/tmp* /data/media/0/realdata/*
-if [ -d /data/safe_staging ]; then sudo umount /data/safe_staging/merged 2>/dev/null || true; rm -rf /data/safe_staging; fi
-systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
-"""
-    self.shell(f"printf %s {shlex.quote(setup + keepalive)} > /data/continue.sh && chmod +x /data/continue.sh")
-    self.shell(setup + clean, timeout=60)
-    self.shell(f"sudo date -u -s {shlex.quote(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()))}")
+    openpilot), and set the clock."""
+    self.shell(f"printf %s {shlex.quote(CONTINUE)} > /data/continue.sh && chmod +x /data/continue.sh\n{SETUP}"
+               f"sudo date -u -s {shlex.quote(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()))} >/dev/null", timeout=60)
 
-  def setup_ssh(self) -> None:
-    """Make the UP's key and ssh config, once, and authorize the key on the DUT, next to its usual keys.
-    Starts sshd for this boot if it's off, without turning on the SshEnabled setting."""
+  def finish_data(self, timeout: float = 120) -> None:
+    """Wait for the kernel to zero a fresh /data's inode tables, at full speed: it does in the background after the
+    first boot, and throttled that writes ~20 MB/s for over a minute, which tests (e.g. of power draw) would see."""
+    self.shell(f"sudo mount -o remount,init_itable=0 /data; s=$SECONDS; while pgrep -x ext4lazyinit >/dev/null && "
+               f"[ $((SECONDS - s)) -lt {int(timeout)} ]; do sleep 0.2; done", timeout=timeout + 30)
+
+  def setup_ssh_config(self) -> None:
+    """Make the UP's key for the DUT and the ssh config, once."""
     SSH_DIR.mkdir(mode=0o700, exist_ok=True)
     if not SSH_KEY.exists():
       subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "ultimate_provisioning", "-f", str(SSH_KEY)], check=True)
@@ -320,9 +392,6 @@ systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
       tmp.write_text(config)
       tmp.chmod(0o644)
       os.replace(tmp, SSH_CONFIG)  # while other ssh read it
-    key = shlex.quote(SSH_KEY.with_suffix(".pub").read_text().strip())
-    self.shell(f"grep -qxF {key} {AUTHORIZED_KEYS} 2>/dev/null || echo {key} >> {AUTHORIZED_KEYS}; chmod 644 {AUTHORIZED_KEYS} && "
-               "{ systemctl is-active -q ssh || sudo systemctl start ssh; }")
 
   def install_package(self) -> None:
     """Copy this package to the DUT, for tests there to use UP.remote()."""
@@ -333,38 +402,27 @@ systemctl is-active -q systemd-resolved || sudo systemctl start systemd-resolved
 
   def host_interface(self) -> str:
     """The UP's network interface for the DUT's USB gadget."""
-    serial = self.serial()
+    serial = gadget_serial()
     for p in glob.glob("/sys/class/net/*/device/../serial"):
       if Path(p).read_text().strip() == serial:
         return p.split("/")[4]
     raise RuntimeError(f"no USB network interface for DUT {serial}")
 
-  def dut_interface(self) -> str:
-    """The DUT's network interface for its USB gadget. Usually usb0, but the modem's cdc_ether can take that name."""
-    return self.shell("echo $(cat /config/usb_gadget/g1/functions/ncm.0/ifname)").strip()  # no trailing newline
-
-  def setup_network(self) -> None:
-    """Bring up the USB network between the UP and the DUT, leaving it alone if it's already up, so open connections survive."""
+  def setup_host_network(self) -> None:
+    """The UP's side of the USB network to the DUT, left alone if it's up so open connections survive, and NAT for the
+    DUT's internet. See connect_script() for the DUT's side."""
     iface = self.host_interface()
     addr = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", iface], capture_output=True, text=True, timeout=5, check=True).stdout
     if f" {HOST_IP}/30 " not in addr or "state UP" not in subprocess.run(["ip", "link", "show", iface], capture_output=True, text=True, timeout=5).stdout:
       subprocess.run(["sudo", "ip", "-4", "addr", "flush", "dev", iface], timeout=5, check=True)
       subprocess.run(["sudo", "ip", "addr", "add", f"{HOST_IP}/30", "dev", iface], timeout=5, check=True)
       subprocess.run(["sudo", "ip", "link", "set", iface, "up"], timeout=5, check=True)
-    dut_iface = self.dut_interface()
-    self.shell(f"ip -4 -o addr show dev {dut_iface} | grep -qF ' {DUT_IP}/30 ' || "
-               f"{{ sudo ip -4 addr flush dev {dut_iface} && sudo ip addr add {DUT_IP}/30 dev {dut_iface}; }}; sudo ip link set {dut_iface} up")
-
-  def share_internet(self) -> None:
-    """NAT the DUT's traffic through the UP. The DUT's own connections (e.g. wifi) still take priority."""
     # AGNOS's 4.9 kernel only supports NAT through the legacy iptables backend
     subprocess.run(["sudo", "sysctl", "-qw", "net.ipv4.ip_forward=1"], timeout=5, check=True)
     rule = ["POSTROUTING", "-s", f"{DUT_IP}/32", "-j", "MASQUERADE"]
     if subprocess.run(["sudo", "iptables-legacy", "-t", "nat", "-C", *rule], capture_output=True, timeout=5).returncode != 0:
       subprocess.run(["sudo", "iptables-legacy", "-t", "nat", "-A", *rule], timeout=5, check=True)
     subprocess.run(["sudo", "iptables-legacy", "-P", "FORWARD", "ACCEPT"], timeout=5, check=True)
-    dut_iface = self.dut_interface()
-    self.shell(f"sudo ip route replace default via {HOST_IP} dev {dut_iface} metric 1000 && sudo resolvectl dns {dut_iface} 1.1.1.1 8.8.8.8")
 
   # *** ssh ***
 

@@ -9,6 +9,8 @@ from ultimate_provisioning.board import UP
 from ultimate_provisioning.console import Console
 
 def main() -> None:
+  # in order with stderr when piped, e.g. to the rack, which reports a failure by its last line
+  sys.stdout.reconfigure(line_buffering=True)
   parser = argparse.ArgumentParser(prog="python -m ultimate_provisioning", description="control the DUT plugged into this UP")
   sub = parser.add_subparsers(dest="command", required=True)
   status = sub.add_parser("status", help="print the DUT's state")
@@ -17,8 +19,8 @@ def main() -> None:
   sub.add_parser("connect", help="make the DUT reachable: boot it if needed, set up its power, adb, ssh, USB network, and internet, "
                                  "and copy this package to it. Doesn't change how the DUT behaves otherwise")
   sub.add_parser("reset", help="put the station back in a clean state for CI: stop what drives the CAN, reset the UP (UP.reset()), "
-                               "then the DUT (DUT.reset()): connect, reflash it if it isn't on openpilot master's AGNOS, and "
-                               "prepare it for tests. Reflashes the DUT if that fails")
+                               "then the DUT (DUT.reset()): flash what differs from openpilot master's AGNOS and a fresh /data, "
+                               "boot it and prepare it for tests. Reflashes all of AGNOS if that fails")
   run = sub.add_parser("run", help="run a bash script on the DUT over ssh, from stdin or CMD, and exit with its status. "
                                    "it can use the UP with UP.remote() until then")
   run.add_argument("--cwd", help="directory to run it in")
@@ -28,7 +30,7 @@ def main() -> None:
   sub.add_parser("ssh", help="a shell on the DUT, which can use the UP with UP.remote() until it exits")
   sub.add_parser("reboot", help="power cycle the DUT")
   sub.add_parser("qdl", help="power cycle the DUT into QDL")
-  sub.add_parser("flash", help="reflash AGNOS from openpilot master to both slots over QDL and boot it, keeping /data")
+  sub.add_parser("flash", help="reflash AGNOS from openpilot master to slot a over QDL and boot it, keeping /data")
   sub.add_parser("off", help="power off the DUT")
   console = sub.add_parser("console", help="the DUT's serial console, ctrl-] to quit (login: comma/comma)")
   console.add_argument("--login", action="store_true", help="log in first, as comma/comma like on every DUT")

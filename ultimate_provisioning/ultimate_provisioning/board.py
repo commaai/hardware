@@ -301,6 +301,11 @@ class UP:
     with open(self._ina_path) as f:
       return int(f.read()) / 1e6
 
+  def read_obd_c_voltage(self) -> float:
+    """The OBD-C supply's voltage, ~15 V when on."""
+    with open(glob.glob(f"{INA_HWMON}/in1_input")[0]) as f:
+      return int(f.read()) / 1e3
+
   def get_power(self, seconds: float = 5, rate: int = 123) -> float:
     """The mean OBD-C power draw (W) over seconds."""
     pwrs = []
