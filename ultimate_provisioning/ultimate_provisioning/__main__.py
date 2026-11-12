@@ -28,7 +28,7 @@ def main() -> None:
   sub.add_parser("ssh", help="a shell on the DUT, which can use the UP with UP.remote() until it exits")
   sub.add_parser("reboot", help="power cycle the DUT")
   sub.add_parser("qdl", help="power cycle the DUT into QDL")
-  sub.add_parser("flash", help="reflash AGNOS from openpilot master to both slots over QDL and boot it, keeping /data")
+  sub.add_parser("flash", help="reflash AGNOS from openpilot master to slot a over QDL and boot it, keeping /data")
   sub.add_parser("off", help="power off the DUT")
   console = sub.add_parser("console", help="the DUT's serial console, ctrl-] to quit (login: comma/comma)")
   console.add_argument("--login", action="store_true", help="log in first, as comma/comma like on every DUT")
