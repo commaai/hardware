@@ -171,7 +171,7 @@ def configure(interfaces: Sequence[str], bitrate: int, *, fd: bool = False, dbit
     command += ["restart-ms", "100"]
     subprocess.run(command, check=True)
     subprocess.run(prefix + ["ip", "link", "set", interface, "txqueuelen", "100"], check=True)
-    # batch the TCAN4550's IRQs, AGNOS 20.4's kernel doesn't support this and returns an error
+    # batch the CAN IRQs where the driver supports it
     subprocess.run(prefix + ["ethtool", "-C", interface, "rx-usecs-irq", "4000", "rx-frames-irq", "16", "tx-usecs-irq", "4000", "tx-frames-irq", "4"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     subprocess.run(prefix + ["ip", "link", "set", interface, "up"], check=True)
