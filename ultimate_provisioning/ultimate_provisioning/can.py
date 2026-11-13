@@ -59,6 +59,9 @@ def on_up() -> bool:
     return False
 
 
+SEND_BUFFER = 4 << 20  # bytes, a full TX queue of CAN FD frames
+
+
 def available_interfaces() -> list[str]:
   """Return CAN network interfaces in numeric order."""
   paths = glob.glob("/sys/class/net/can[0-9]*")
@@ -92,6 +95,7 @@ class CAN:
         sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
         sock.setblocking(False)
         sock.setsockopt(socket.SOL_CAN_RAW, CAN_RAW_FD_FRAMES, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)
         sock.bind((interface,))
         self._sockets[bus] = sock
         self._selector.register(sock, selectors.EVENT_READ, bus)
@@ -163,6 +167,8 @@ class CAN:
 def configure(interfaces: Sequence[str], bitrate: int, *, fd: bool = False, dbitrate: int = 2_000_000) -> None:
   """Bring interfaces up. Run as root, or this uses passwordless sudo."""
   prefix = [] if os.geteuid() == 0 else ["sudo"]
+  # lets the sockets' send buffers hold a full TX queue
+  subprocess.run(prefix + ["sysctl", "-qw", f"net.core.wmem_max={SEND_BUFFER}"], check=False)
   for interface in interfaces:
     subprocess.run(prefix + ["ip", "link", "set", interface, "down"], check=False)
     command = prefix + ["ip", "link", "set", interface, "type", "can", "bitrate", str(bitrate)]
@@ -174,9 +180,9 @@ def configure(interfaces: Sequence[str], bitrate: int, *, fd: bool = False, dbit
     command += ["restart-ms", "100"]
     subprocess.run(command, check=True)
     # a longer queue for CAN FD bursts
-    subprocess.run(prefix + ["ip", "link", "set", interface, "txqueuelen", "1000" if fd else "100"], check=True)
+    subprocess.run(prefix + ["ip", "link", "set", interface, "txqueuelen", "4000"], check=True)
     # message RAM split and IRQ batching, where the driver supports them
-    rx, tx, coalesce = (15, 12, ["3000", "6", "3000", "4"]) if fd else (24, 4, ["4000", "16", "4000", "4"])
+    rx, tx, coalesce = (15, 12, ["3000", "6", "3000", "4"]) if fd else (32, 32, ["4000", "16", "4000", "4"])
     quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "check": False}
     subprocess.run(prefix + ["ethtool", "-G", interface, "rx", str(rx), "tx", str(tx)], **quiet)
     # the RAM split applies when the link opens
