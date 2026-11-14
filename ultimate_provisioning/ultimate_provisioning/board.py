@@ -164,6 +164,8 @@ class UP:
     if self.can is not None:
       self.can.close()
       self.can = None
+      # drops the frames the closed sockets left queued, which would go out once something ACKs them
+      configure(self.interfaces, 500_000)
     self.orientation, self.ignition = ORIENTATION_1, False
     self._apply_harness()
 
