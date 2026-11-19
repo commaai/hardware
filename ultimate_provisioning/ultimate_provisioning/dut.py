@@ -319,7 +319,7 @@ class DUT:
   def flash(self, images: dict[str, Path] | None = None, timeout: float = 300) -> None:
     """Flash images, partition name to image (e.g. "system_a", "userdata") over QDL in one session, and boot slot a.
     By default all of AGNOS from openpilot master to slot a, keeping /data, see flash.py."""
-    cmd, parts = flash.prepare()
+    cmd, parts = flash.prepare(fetch_images=images is None)
     if images is None:
       images = {f"{n}_a": p["path"] for n, p in parts.items()}
     self.enter_qdl()

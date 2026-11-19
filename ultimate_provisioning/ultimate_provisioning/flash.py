@@ -83,7 +83,7 @@ def setup() -> tuple[Path, Path]:
   return bun, qdl
 
 
-def prepare() -> tuple[list[str], dict[str, dict]]:
+def prepare(*, fetch_images: bool = True) -> tuple[list[str], dict[str, dict]]:
   """Fetch everything for flashing into CACHE, and drop the cached images openpilot master no longer has.
 
   Returns the command that, with <partition>=<image> arguments added, flashes those in QDL in one session, makes slot a
@@ -91,12 +91,15 @@ def prepare() -> tuple[list[str], dict[str, dict]]:
   """
   bun, qdl = setup()
   programmer = fetch(PROGRAMMER_URL, CACHE / f"programmer-{PROGRAMMER_HASH}.bin", PROGRAMMER_HASH)
+  # the error level hides qdl.js's warnings about the backup GPTs, which abctl doesn't keep in sync
+  cmd = ["sudo", "env", "QDL_LOG_LEVEL=error", str(bun), str(qdl / "up_flash.js"), str(programmer)]
+  if not fetch_images:
+    return cmd, {}
   parts = {i["name"]: i | {"path": fetch(i["url"], CACHE / "images" / f"{i['name']}-{i['hash']}.img", i["hash"])} for i in manifest()}
   for f in (CACHE / "images").iterdir():
     if f not in [p["path"] for p in parts.values()]:
       f.unlink()
-  # the error level hides qdl.js's warnings about the backup GPTs, which abctl doesn't keep in sync
-  return ["sudo", "env", "QDL_LOG_LEVEL=error", str(bun), str(qdl / "up_flash.js"), str(programmer)], parts
+  return cmd, parts
 
 
 # *** checking what's on the DUT ***
