@@ -19,6 +19,10 @@ From the outside, a comma 3X looks similar to a comma three.
       <td>tici</td>
    </tr>
    <tr>
+      <td>Buyable in shop</td>
+      <td><a href="https://web.archive.org/web/20230720224832/https://www.comma.ai/shop/comma-three">No (view archive)</a></td>
+   </tr>
+   <tr>
       <td>Last openpilot version</td>
       <td><a href="https://github.com/commaai/openpilot/tree/release-tici">v0.10.0</a></td>
    </tr>
